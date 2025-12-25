@@ -25,6 +25,7 @@
 [![Rust](https://img.shields.io/badge/Rust-1.70%2B-orange?style=for-the-badge&logo=rust)](.)
 [![License](https://img.shields.io/badge/license-Proprietary-red?style=for-the-badge)](LICENSE)
 [![PRs Welcome](https://img.shields.io/badge/PRs-welcome-brightgreen?style=for-the-badge)](.)
+[![GitHub Sponsors](https://img.shields.io/badge/Sponsor-krish567366-ff69b4?style=for-the-badge&logo=github)](https://github.com/sponsors/krish567366)
 
 <p>
 <a href="https://submicro.krishnabajpai.me/">Live Demo</a> •
