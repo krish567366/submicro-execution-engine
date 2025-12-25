@@ -144,9 +144,7 @@ struct CalibrationQuality {
     uint64_t version_id;
 };
 
-// ============================================================================
 // Model Store (Parameter Persistence & Calibration Management)
-// ============================================================================
 //
 // This class provides a clean abstraction for loading empirically calibrated
 // parameters. In development, it reads from JSON files. In production, it
@@ -154,9 +152,9 @@ struct CalibrationQuality {
 
 class ModelStore {
 public:
-    // ========================================================================
+    // 
     // Construction
-    // ========================================================================
+    // 
     
     explicit ModelStore(const std::string& config_path = "./config/parameters.json")
         : config_path_(config_path)
@@ -164,9 +162,9 @@ public:
     {
     }
     
-    // ========================================================================
+    // 
     // Initialization
-    // ========================================================================
+    // 
     
     bool initialize() {
         std::lock_guard<std::mutex> lock(mutex_);
@@ -184,9 +182,9 @@ public:
         return true;
     }
     
-    // ========================================================================
+    // 
     // Parameter Retrieval (Fast Path - No I/O)
-    // ========================================================================
+    // 
     
     // Get Hawkes parameters (thread-safe, cached)
     std::optional<HawkesParameters> get_hawkes_parameters(const std::string& symbol = "default") {
@@ -236,9 +234,9 @@ public:
         return std::nullopt;
     }
     
-    // ========================================================================
+    // 
     // Parameter Updates (Production: Persist to Backend)
-    // ========================================================================
+    // 
     
     // Update Hawkes parameters (e.g., after recalibration)
     bool update_hawkes_parameters(const std::string& symbol, 
@@ -298,9 +296,9 @@ public:
         return persist_to_file();
     }
     
-    // ========================================================================
+    // 
     // Calibration History & Auditing
-    // ========================================================================
+    // 
     
     // Get calibration quality metrics
     std::vector<CalibrationQuality> get_calibration_quality() const {
@@ -344,9 +342,9 @@ public:
     }
 
 private:
-    // ========================================================================
+    // 
     // File-Based Storage (Development Mode)
-    // ========================================================================
+    // 
     
     bool load_from_file(const std::string& path) {
         // Simplified JSON loading (production would use nlohmann/json or similar)
@@ -360,17 +358,13 @@ private:
         return true;
     }
     
-    // ========================================================================
+    // 
     // Default Parameters (Empirically Reasonable Values)
-    // ========================================================================
+    // 
     
     void load_default_parameters() {
-        // ====================================================================
-        // DEFAULT HAWKES PARAMETERS
-        // ====================================================================
-        // These values are based on empirical studies of high-frequency
-        // market microstructure (see Bacry et al. 2015, "Hawkes Processes
-        // in Finance", Market Microstructure and Liquidity)
+        // Default Hawkes parameters
+        // Based on empirical studies of high-frequency market microstructure
         
         HawkesParameters hawkes;
         hawkes.alpha_self = 0.3;        // Self-excitation (30% feedback)
@@ -388,11 +382,8 @@ private:
         
         hawkes_params_["default"] = hawkes;
         
-        // ====================================================================
-        // DEFAULT AVELLANEDA-STOIKOV PARAMETERS
-        // ====================================================================
+        // Default Avellaneda-Stoikov parameters
         // Based on original paper: Avellaneda & Stoikov (2008)
-        // "High-frequency trading in a limit order book"
         
         AvellanedaStoikovParameters as;
         as.gamma = 0.1;                 // Moderate risk aversion
@@ -410,9 +401,9 @@ private:
         
         as_params_["default"] = as;
         
-        // ====================================================================
+        // 
         // DEFAULT RISK PARAMETERS
-        // ====================================================================
+        // 
         
         RiskParameters risk;
         risk.max_position = 1000;
@@ -438,9 +429,9 @@ private:
         
         risk_params_["default"] = risk;
         
-        // ====================================================================
+        // 
         // DEFAULT INFERENCE MODEL PARAMETERS
-        // ====================================================================
+        // 
         // Simplified model weights (production would load from trained model)
         
         InferenceModelParameters inference;
@@ -469,9 +460,9 @@ private:
         inference_params_["default"] = inference;
     }
     
-    // ========================================================================
+    // 
     // Utilities
-    // ========================================================================
+    // 
     
     static int64_t current_timestamp() {
         return std::chrono::duration_cast<std::chrono::nanoseconds>(
@@ -479,9 +470,9 @@ private:
         ).count();
     }
     
-    // ========================================================================
+    // 
     // Member Variables
-    // ========================================================================
+    // 
     
     std::string config_path_;
     bool initialized_;
@@ -498,94 +489,4 @@ private:
     // Thread safety
     mutable std::mutex mutex_;
 };
-
-// ============================================================================
-// Production Integration Example (Redis Backend)
-// ============================================================================
-//
-// For production deployment with Redis:
-//
-// class RedisModelStore : public ModelStore {
-// public:
-//     explicit RedisModelStore(const std::string& redis_url) {
-//         redis_client_ = connect_to_redis(redis_url);
-//     }
-//     
-//     std::optional<HawkesParameters> get_hawkes_parameters(const std::string& symbol) override {
-//         // Fast path: check local cache first
-//         if (auto cached = get_from_cache(symbol)) {
-//             return cached;
-//         }
-//         
-//         // Cache miss: fetch from Redis (microsecond latency)
-//         std::string key = "hawkes:" + symbol;
-//         std::string json_data = redis_client_.get(key);
-//         
-//         if (json_data.empty()) {
-//             return std::nullopt;
-//         }
-//         
-//         // Deserialize JSON to HawkesParameters
-//         HawkesParameters params = parse_json(json_data);
-//         
-//         // Update local cache
-//         update_cache(symbol, params);
-//         
-//         return params;
-//     }
-//     
-// private:
-//     RedisClient redis_client_;
-//     LRUCache<std::string, HawkesParameters> cache_;  // Local LRU cache
-// };
-
-// ============================================================================
-// Integration Example (for main.cpp)
-// ============================================================================
-//
-// // Initialize model store
-// ModelStore model_store("./config/parameters.json");
-// model_store.initialize();
-//
-// // Load empirically calibrated Hawkes parameters
-// auto hawkes_params = model_store.get_hawkes_parameters("BTCUSDT");
-// if (hawkes_params) {
-//     HawkesEngine hawkes(
-//         hawkes_params->alpha_self,
-//         hawkes_params->alpha_cross,
-//         hawkes_params->beta,
-//         hawkes_params->gamma,
-//         hawkes_params->lambda_base
-//     );
-//     
-//     std::cout << "Loaded Hawkes parameters (R² = " 
-//               << hawkes_params->calibration_r_squared << ")" << std::endl;
-// }
-//
-// // Load Avellaneda-Stoikov parameters
-// auto as_params = model_store.get_as_parameters("BTCUSDT");
-// if (as_params) {
-//     AvellanedaStoikov market_maker(
-//         as_params->gamma,
-//         as_params->sigma,
-//         as_params->kappa
-//     );
-//     
-//     std::cout << "Loaded AS parameters (Sharpe = " 
-//               << as_params->backtest_sharpe << ")" << std::endl;
-// }
-//
-// // Check if parameters need recalibration
-// if (model_store.needs_recalibration("BTCUSDT", 7 * 24 * 3600)) {
-//     std::cout << "WARNING: Parameters are >7 days old, recalibration recommended" << std::endl;
-// }
-//
-// // After recalibration, update parameters
-// HawkesParameters new_params = recalibrate_hawkes_model(historical_data);
-// model_store.update_hawkes_parameters(
-//     "BTCUSDT",
-//     new_params,
-//     "calibration_system",
-//     "Weekly recalibration based on 1M events from Dec 2-9"
-// );
 
