@@ -9,22 +9,11 @@
 
 namespace hft {
 
-// ============================================================================
-// Kernel Bypass NIC Interface
-// Simulates DPDK/XDP-style zero-copy market data ingestion
-// 
-// Key features:
-// 1. Lock-free ring buffer for zero-copy data transfer
-// 2. Direct memory access (DMA) simulation
-// 3. Event-driven architecture (no polling overhead)
-// 4. Cache-line aligned data structures
-// ============================================================================
-
 class KernelBypassNIC {
 public:
-    // ========================================================================
+    // 
     // Constructor
-    // ========================================================================
+    // 
     explicit KernelBypassNIC(size_t queue_capacity = 16384)  // Must be power of 2
         : market_data_queue_(),
           is_running_(false),
@@ -35,9 +24,9 @@ public:
                      "Queue capacity must be power of 2");
     }
     
-    // ========================================================================
+    // 
     // Destructor
-    // ========================================================================
+    // 
     ~KernelBypassNIC() {
         stop();
     }
@@ -46,10 +35,10 @@ public:
     KernelBypassNIC(const KernelBypassNIC&) = delete;
     KernelBypassNIC& operator=(const KernelBypassNIC&) = delete;
     
-    // ========================================================================
+    // 
     // Start the NIC (begins receiving data)
     // In production: would initialize DPDK, map NIC memory, setup RX rings
-    // ========================================================================
+    // 
     void start() {
         if (is_running_.exchange(true, std::memory_order_acquire)) {
             return;  // Already running
@@ -66,43 +55,43 @@ public:
         // Real data would come from exchange multicast feeds
     }
     
-    // ========================================================================
+    // 
     // Stop the NIC
-    // ========================================================================
+    // 
     void stop() {
         is_running_.store(false, std::memory_order_release);
     }
     
-    // ========================================================================
+    // 
     // Get next market tick (zero-copy, non-blocking)
     // Returns: true if tick was available, false if queue empty
     // 
     // This is the critical path function - must be extremely fast
-    // ========================================================================
+    // 
     bool get_next_tick(MarketTick& tick) {
         // Attempt to pop from lock-free queue
         // This is a zero-copy operation - no kernel involvement
         return market_data_queue_.pop(tick);
     }
     
-    // ========================================================================
+    // 
     // Peek at next tick without removing (for pre-processing)
-    // ========================================================================
+    // 
     const MarketTick* peek_next_tick() const {
         return market_data_queue_.peek();
     }
     
-    // ========================================================================
+    // 
     // Check if data is available
-    // ========================================================================
+    // 
     bool has_data() const {
         return !market_data_queue_.empty();
     }
     
-    // ========================================================================
+    // 
     // Simulate receiving a packet from exchange (producer side)
     // In production: called from NIC interrupt handler or poll-mode driver
-    // ========================================================================
+    // 
     bool inject_market_data(const MarketTick& tick) {
         if (!is_running_.load(std::memory_order_acquire)) {
             return false;
@@ -120,9 +109,9 @@ public:
         return success;
     }
     
-    // ========================================================================
+    // 
     // Batch injection for market data bursts (higher throughput)
-    // ========================================================================
+    // 
     size_t inject_batch(const MarketTick* ticks, size_t count) {
         if (!is_running_.load(std::memory_order_acquire)) {
             return 0;
@@ -146,10 +135,10 @@ public:
         return injected;
     }
     
-    // ========================================================================
+    // 
     // Simulate raw packet reception (closest to DPDK model)
     // In production: would parse exchange-specific binary protocol
-    // ========================================================================
+    // 
     template<typename ExchangeProtocol>
     bool receive_raw_packet(const uint8_t* packet_data, size_t packet_size) {
         // In production: 
@@ -172,9 +161,9 @@ public:
         return false;
     }
     
-    // ========================================================================
+    // 
     // Get NIC statistics
-    // ========================================================================
+    // 
     struct NICStats {
         uint64_t packets_received;
         uint64_t bytes_received;
@@ -194,25 +183,25 @@ public:
         return stats;
     }
     
-    // ========================================================================
+    // 
     // Reset statistics
-    // ========================================================================
+    // 
     void reset_stats() {
         total_packets_received_.store(0, std::memory_order_release);
         total_bytes_received_.store(0, std::memory_order_release);
     }
     
-    // ========================================================================
+    // 
     // Check if NIC is running
-    // ========================================================================
+    // 
     bool is_running() const {
         return is_running_.load(std::memory_order_acquire);
     }
     
-    // ========================================================================
+    // 
     // Configure receive buffer affinity (CPU pinning for NUMA optimization)
     // In production: pins processing thread to same NUMA node as NIC
-    // ========================================================================
+    // 
     void set_cpu_affinity(int cpu_core) {
 #ifdef __linux__
         // In production: would use pthread_setaffinity_np
@@ -226,24 +215,22 @@ public:
     }
     
 private:
-    // ========================================================================
+    // 
     // Lock-free ring buffer (zero-copy queue)
     // Sized as power-of-2 for fast modulo operations
-    // ========================================================================
+    // 
     LockFreeQueue<MarketTick, 16384> market_data_queue_;
     
-    // ========================================================================
+    // 
     // State variables
-    // ========================================================================
+    // 
     std::atomic<bool> is_running_;
     std::atomic<uint64_t> total_packets_received_;
     std::atomic<uint64_t> total_bytes_received_;
 };
 
-// ============================================================================
 // Market Data Feed Simulator
 // Simulates exchange multicast feed for testing
-// ============================================================================
 
 class MarketDataSimulator {
 public:
