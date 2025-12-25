@@ -12,23 +12,23 @@ echo ""
 
 # Check if running on Linux
 if [[ "$(uname)" != "Linux" ]]; then
-    echo "❌ Error: This script must run on Linux"
+    echo " Error: This script must run on Linux"
     echo "   Current OS: $(uname)"
     exit 1
 fi
 
-echo "✅ Running on Linux: $(uname -r)"
+echo " Running on Linux: $(uname -r)"
 echo ""
 
 # Check compiler
 if ! command -v g++ &> /dev/null; then
-    echo "❌ Error: g++ not found"
+    echo " Error: g++ not found"
     echo "   Install: sudo apt-get install g++ (Ubuntu) or sudo yum install gcc-c++ (RHEL)"
     exit 1
 fi
 
 GCC_VERSION=$(g++ --version | head -n1)
-echo "✅ Compiler: $GCC_VERSION"
+echo " Compiler: $GCC_VERSION"
 echo ""
 
 # Check for required kernel features
@@ -37,18 +37,18 @@ echo "Checking kernel configuration..."
 # Check if isolcpus is configured
 if grep -q "isolcpus" /proc/cmdline 2>/dev/null; then
     ISOLATED_CPUS=$(grep -o 'isolcpus=[^ ]*' /proc/cmdline | cut -d= -f2)
-    echo "✅ CPU isolation enabled: isolcpus=$ISOLATED_CPUS"
+    echo " CPU isolation enabled: isolcpus=$ISOLATED_CPUS"
 else
-    echo "⚠️  Warning: No CPU isolation configured"
+    echo "  Warning: No CPU isolation configured"
     echo "   Recommended: Add 'isolcpus=2-7 nohz_full=2-7' to /etc/default/grub"
 fi
 
 # Check huge pages
 HUGEPAGES=$(cat /proc/sys/vm/nr_hugepages 2>/dev/null || echo "0")
 if [[ "$HUGEPAGES" -gt 0 ]]; then
-    echo "✅ Huge pages configured: $HUGEPAGES pages"
+    echo " Huge pages configured: $HUGEPAGES pages"
 else
-    echo "⚠️  Warning: No huge pages configured"
+    echo "  Warning: No huge pages configured"
     echo "   Run: echo 1024 | sudo tee /proc/sys/vm/nr_hugepages"
 fi
 
@@ -110,16 +110,16 @@ echo ""
 g++ "${CXXFLAGS[@]}" "${INCLUDES[@]}" "${SOURCES[@]}" -o "$OUTPUT_DIR/$BINARY_NAME"
 
 if [[ $? -eq 0 ]]; then
-    echo "✅ Build successful!"
+    echo " Build successful!"
     echo ""
     
     # Set capabilities for real-time priority (without sudo)
     if command -v setcap &> /dev/null; then
         echo "Setting capabilities for real-time execution..."
         sudo setcap cap_sys_nice,cap_ipc_lock,cap_sys_rawio=+ep "$OUTPUT_DIR/$BINARY_NAME"
-        echo "✅ Capabilities set"
+        echo " Capabilities set"
     else
-        echo "⚠️  setcap not found - will need sudo to run benchmark"
+        echo "  setcap not found - will need sudo to run benchmark"
     fi
     
     echo ""
@@ -146,6 +146,6 @@ if [[ $? -eq 0 ]]; then
     echo ""
     
 else
-    echo "❌ Build failed!"
+    echo " Build failed!"
     exit 1
 fi
