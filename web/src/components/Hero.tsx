@@ -1,5 +1,5 @@
 import { motion } from 'framer-motion';
-import { Github, ExternalLink } from 'lucide-react';
+import { Github, ExternalLink, Heart } from 'lucide-react';
 
 export default function Hero() {
   return (
@@ -34,6 +34,15 @@ export default function Hero() {
               >
                 <Github className="w-5 h-5" />
                 View on GitHub
+              </a>
+              <a
+                href="https://github.com/sponsors/krish567366"
+                target="_blank"
+                rel="noopener noreferrer"
+                className="inline-flex items-center gap-2 px-6 py-3 rounded-lg bg-red-50 border-2 border-red-200 text-red-700 font-medium hover:border-red-300 hover:bg-red-100 transition-all"
+              >
+                <Heart className="w-5 h-5" />
+                Sponsor
               </a>
               <a
                 href="#architecture"

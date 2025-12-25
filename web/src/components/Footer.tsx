@@ -1,5 +1,5 @@
 import { motion } from 'framer-motion';
-import { Github, Twitter, Linkedin, Mail, Star } from 'lucide-react';
+import { Github, Twitter, Linkedin, Mail, Star, Heart } from 'lucide-react';
 
 export default function Footer() {
   return (
@@ -119,6 +119,17 @@ export default function Footer() {
             >
               <Star className="w-4 h-4 group-hover:fill-yellow-500 group-hover:text-yellow-500 transition-all" />
               <span className="text-sm font-medium">Star on GitHub</span>
+            </a>
+
+            {/* Sponsor on GitHub */}
+            <a
+              href="https://github.com/sponsors/krish567366"
+              target="_blank"
+              rel="noopener noreferrer"
+              className="flex items-center gap-2 px-4 py-2 rounded-lg border border-red-200 bg-red-50 hover:border-red-300 hover:bg-red-100 text-red-700 transition-all group"
+            >
+              <Heart className="w-4 h-4 group-hover:fill-red-500 group-hover:text-red-500 transition-all" />
+              <span className="text-sm font-medium">Sponsor</span>
             </a>
           </div>
         </div>
