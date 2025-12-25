@@ -8,7 +8,7 @@ This guide will help you deploy and run the HFT benchmark suite on Linux product
 
 ---
 
-## 🖥️ System Requirements
+## System Requirements
 
 ### Minimum Requirements
 - **OS:** Linux kernel 4.0+ (Ubuntu 20.04+, RHEL 8+, Amazon Linux 2)
@@ -62,7 +62,7 @@ cd hft-benchmark/
 
 ---
 
-## ⚙️ Step 2: System Configuration (Run as root)
+## Step 2: System Configuration (Run as root)
 
 ### 2.1 Check Current Configuration
 ```bash
@@ -184,15 +184,15 @@ chmod +x build_benchmark.sh
 
 Expected output:
 ```
-✅ Build successful!
-✅ Capabilities set
+ Build successful!
+ Capabilities set
 Binary: build/hft_benchmark
 Size: 2.1M
 ```
 
 ---
 
-## 🚀 Step 4: Run Benchmarks
+##  Step 4: Run Benchmarks
 
 ### 4.1 Quick Test (1M samples, ~10 seconds)
 
@@ -233,7 +233,7 @@ sudo ./build/hft_benchmark --full --samples 50000000 --output full_system
 
 ---
 
-## 📊 Step 5: Analyze Results
+## Step 5: Analyze Results
 
 ### 5.1 View Console Output
 
@@ -298,7 +298,7 @@ python3 plot_results.py prod_results_raw_samples.csv
 
 ---
 
-## 🎯 Step 6: Interpreting Results
+##  Step 6: Interpreting Results
 
 ### What to Look For
 
@@ -329,7 +329,7 @@ python3 plot_results.py prod_results_raw_samples.csv
 
 ---
 
-## 🔧 Advanced Configuration
+## Advanced Configuration
 
 ### Hardware Timestamping (Mellanox/Solarflare)
 
@@ -366,7 +366,7 @@ sudo ./build/hft_benchmark --replay market_data.pcap
 
 ---
 
-## 📈 Continuous Monitoring
+##  Continuous Monitoring
 
 ### Automated Daily Benchmarks
 
@@ -433,7 +433,7 @@ uptime
 
 ---
 
-## 📚 Further Optimization
+##  Further Optimization
 
 ### Kernel Tuning
 
@@ -459,15 +459,15 @@ In your server BIOS:
 
 ---
 
-## ✅ Success Criteria
+##  Success Criteria
 
 Your system is ready for production if:
 
-- ✅ p50 < 850 ns
-- ✅ p99 < 1000 ns
-- ✅ Jitter < 400 ns
-- ✅ All component benchmarks meet targets
-- ✅ Consistent results across multiple runs
+-  p50 < 850 ns
+-  p99 < 1000 ns
+-  Jitter < 400 ns
+-  All component benchmarks meet targets
+-  Consistent results across multiple runs
 
 ---
 
@@ -481,7 +481,7 @@ For issues or questions:
 
 ---
 
-## 🎓 Next Steps
+## Next Steps
 
 After successful benchmarking:
 1. Integrate with real exchange feeds
@@ -489,4 +489,4 @@ After successful benchmarking:
 3. Deploy to production with monitoring
 4. Run continuous performance regression tests
 
-**Target: Sub-microsecond tick-to-trade in production! 🚀**
+**Target: Sub-microsecond tick-to-trade in production! **
