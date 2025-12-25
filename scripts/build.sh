@@ -29,7 +29,7 @@ if ! command -v g++ &> /dev/null && ! command -v clang++ &> /dev/null; then
     exit 1
 fi
 
-echo -e "${GREEN}✓ Prerequisites satisfied${NC}"
+echo -e "${GREEN}Prerequisites satisfied${NC}"
 echo ""
 
 # Clean previous build
