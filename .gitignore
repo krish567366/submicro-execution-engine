@@ -53,9 +53,7 @@ ml_models/*.weights
 ml_models/*.onnx
 model_weights_*.bin
 
-# Rust implementation files
-src/lib.rs
-src/*.rs
+# NOTE: Rust FFI implementation now included under proprietary license
 
 # Real market data (purchased/licensed)
 **/real_market_data_*.csv
