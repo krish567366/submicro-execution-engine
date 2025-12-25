@@ -584,11 +584,11 @@ diff <(./run1 | grep EVENT) <(./run2 | grep EVENT)
 
 ### What We Claim
 
-✓ Component-level latency measurements (TSC-based)
-✓ Deterministic replay capability
-✓ Lock-free data structure implementations
-✓ Zero-copy data paths
-✓ Cache-aligned memory layouts
+Component-level latency measurements (TSC-based)
+Deterministic replay capability
+Lock-free data structure implementations
+Zero-copy data paths
+Cache-aligned memory layouts
 
 ### What We Do NOT Claim
 
@@ -948,7 +948,7 @@ FPGA Inference:         400 ns     (fixed)
 Quote Calculation:       87 ns/op
 Risk Check (atomic):     12 ns/op
 -------------------------------------------
-Total Decision Cycle:   850 ns     (< 1 µs ✓)
+Total Decision Cycle:   850 ns     (< 1 µs )
 ```
 
 ## Future Enhancements
