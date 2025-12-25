@@ -32,11 +32,11 @@ with open(filename, 'r') as f:
                 'depth': int(parts[6])
             })
 
-print(f"✓ Loaded {len(events):,} events")
+print(f"Loaded {len(events):,} events")
 print()
 
 # Basic statistics
-print("📊 BASIC STATISTICS")
+print("BASIC STATISTICS")
 print("-" * 70)
 
 timestamps = [e['timestamp'] for e in events]
@@ -61,7 +61,7 @@ print(f"Price range:     ${max(prices) - min(prices):.4f}")
 print()
 
 # Order flow imbalance detection
-print("🎯 ALPHA BURST DETECTION")
+print("ALPHA BURST DETECTION")
 print("-" * 70)
 
 # Calculate OBI over windows
@@ -143,7 +143,7 @@ for event_type, count in sorted(event_types.items(), key=lambda x: x[1], reverse
 print()
 
 # Side distribution
-print("⚖️  SIDE DISTRIBUTION")
+print("SIDE DISTRIBUTION")
 print("-" * 70)
 
 sides = defaultdict(int)
@@ -177,11 +177,11 @@ print("=" * 70)
 print()
 
 checks = [
-    ("✓" if len(events) >= 90000 else "✗", f"Sufficient events: {len(events):,} >= 90,000"),
-    ("✓" if duration_sec >= 0.005 else "✗", f"Sufficient duration: {duration_sec:.3f}s >= 0.005s"),
-    ("✓" if len(burst_groups) >= 10 else "⚠", f"Alpha bursts detected: {len(burst_groups)} (expected ~17)"),
-    ("✓" if abs(sides['B'] - sides['S']) / len(events) < 0.05 else "✗", "Side balance within 5%"),
-    ("✓" if np.std(prices) < 0.2 else "✗", f"Price volatility reasonable: σ={np.std(prices):.4f}"),
+    ("PASS" if len(events) >= 90000 else "FAIL", f"Sufficient events: {len(events):,} >= 90,000"),
+    ("PASS" if duration_sec >= 0.005 else "FAIL", f"Sufficient duration: {duration_sec:.3f}s >= 0.005s"),
+    ("PASS" if len(burst_groups) >= 10 else "WARN", f"Alpha bursts detected: {len(burst_groups)} (expected ~17)"),
+    ("PASS" if abs(sides['B'] - sides['S']) / len(events) < 0.05 else "FAIL", "Side balance within 5%"),
+    ("PASS" if np.std(prices) < 0.2 else "FAIL", f"Price volatility reasonable: σ={np.std(prices):.4f}"),
 ]
 
 for symbol, check in checks:
@@ -200,9 +200,9 @@ compatible_bursts = sum(1 for g in burst_groups if len(g) >= 12)
 print(f"Bursts ≥12 ticks:   {compatible_bursts}/{len(burst_groups)}")
 
 if compatible_bursts >= 10:
-    print("✓ Data is compatible with 12-tick temporal filter")
+    print("Data is compatible with 12-tick temporal filter")
 else:
-    print("⚠ May need to adjust filter parameters or regenerate data")
+    print("Warning: May need to adjust filter parameters or regenerate data")
 
 print()
 print("=" * 70)
