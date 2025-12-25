@@ -27,7 +27,7 @@ $CXX $CXXFLAGS $INCLUDES $SOURCES -o $OUTPUT
 
 if [ $? -eq 0 ]; then
     echo ""
-    echo "✓ Build successful!"
+    echo "Build successful!"
     echo ""
     echo "Run with: ./$OUTPUT"
     echo ""
