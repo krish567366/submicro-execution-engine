@@ -39,27 +39,24 @@
 using namespace hft;
 using namespace hft::benchmark;
 
-// ============================================================================
 // System Configuration for Ultra-Low Latency
-// ============================================================================
-
 void configure_for_benchmarking() {
     std::cout << "Configuring system for benchmarking...\n";
     
     // 1. Lock memory pages (prevent swapping)
     if (mlockall(MCL_CURRENT | MCL_FUTURE) != 0) {
-        std::cerr << "⚠️  Warning: Failed to lock memory pages (run with sudo)\n";
+        std::cerr << "  Warning: Failed to lock memory pages (run with sudo)\n";
     } else {
-        std::cout << "✅ Memory pages locked\n";
+        std::cout << " Memory pages locked\n";
     }
     
     // 2. Set real-time priority
     struct sched_param param;
     param.sched_priority = 49;  // SCHED_FIFO priority 49
     if (sched_setscheduler(0, SCHED_FIFO, &param) != 0) {
-        std::cerr << "⚠️  Warning: Failed to set real-time priority (run with sudo)\n";
+        std::cerr << "  Warning: Failed to set real-time priority (run with sudo)\n";
     } else {
-        std::cout << "✅ Real-time priority set (SCHED_FIFO 49)\n";
+        std::cout << " Real-time priority set (SCHED_FIFO 49)\n";
     }
     
     // 3. Pin to isolated CPU core
@@ -67,9 +64,9 @@ void configure_for_benchmarking() {
     CPU_ZERO(&cpuset);
     CPU_SET(2, &cpuset);  // Use core 2 (assumed isolated)
     if (sched_setaffinity(0, sizeof(cpuset), &cpuset) != 0) {
-        std::cerr << "⚠️  Warning: Failed to set CPU affinity\n";
+        std::cerr << "  Warning: Failed to set CPU affinity\n";
     } else {
-        std::cout << "✅ Pinned to CPU core 2\n";
+        std::cout << " Pinned to CPU core 2\n";
     }
     
     // 4. Set resource limits
@@ -77,16 +74,13 @@ void configure_for_benchmarking() {
     rlim.rlim_cur = RLIM_INFINITY;
     rlim.rlim_max = RLIM_INFINITY;
     if (setrlimit(RLIMIT_MEMLOCK, &rlim) != 0) {
-        std::cerr << "⚠️  Warning: Failed to set memory lock limit\n";
+        std::cerr << "  Warning: Failed to set memory lock limit\n";
     }
     
     std::cout << "\n";
 }
 
-// ============================================================================
 // Mock Trading System for Benchmarking
-// ============================================================================
-
 class BenchmarkTradingSystem {
 public:
     BenchmarkTradingSystem() 
@@ -104,31 +98,23 @@ public:
     TickToTradeBenchmark::Sample process_tick_instrumented(const MarketTick& tick) {
         TickToTradeBenchmark::Sample sample = {};
         
-        // ════════════════════════════════════════════════════════════════
         // Phase 1: Packet Reception (simulated NIC timestamp)
-        // ════════════════════════════════════════════════════════════════
         sample.tsc_feed_sent = rdtscp();
         
         // Simulate NIC DMA latency (30 ns)
         busy_wait_ns(30);
         sample.tsc_app_received = rdtscp();
         
-        // ════════════════════════════════════════════════════════════════
         // Phase 2: Packet Parsing (20 ns)
-        // ════════════════════════════════════════════════════════════════
         MarketTick parsed_tick = tick;  // In reality: zero-copy parser
         sample.tsc_parse_done = rdtscp();
         
-        // ════════════════════════════════════════════════════════════════
         // Phase 3: Order Book Update (30 ns with flat arrays)
-        // ════════════════════════════════════════════════════════════════
         lob_.update_bid(0, tick.bid_price, tick.bid_size);
         lob_.update_ask(0, tick.ask_price, tick.ask_size);
         sample.tsc_lob_done = rdtscp();
         
-        // ════════════════════════════════════════════════════════════════
         // Phase 4: Feature Extraction (250 ns)
-        // ════════════════════════════════════════════════════════════════
         TradingEvent event;
         event.arrival_time = tick.timestamp;
         event.event_type = Side::BUY;
@@ -145,15 +131,11 @@ public:
         
         sample.tsc_features_done = rdtscp();
         
-        // ════════════════════════════════════════════════════════════════
         // Phase 5: FPGA DNN Inference (400 ns fixed)
-        // ════════════════════════════════════════════════════════════════
         auto prediction = fpga_inference_.predict(features);
         sample.tsc_inference_done = rdtscp();
         
-        // ════════════════════════════════════════════════════════════════
         // Phase 6: Avellaneda-Stoikov Strategy (70 ns)
-        // ════════════════════════════════════════════════════════════════
         auto quotes = strategy_.calculate_quotes(
             tick.mid_price,
             current_position_,
@@ -162,9 +144,7 @@ public:
         );
         sample.tsc_strategy_done = rdtscp();
         
-        // ════════════════════════════════════════════════════════════════
         // Phase 7: Risk Checks (20 ns with branch optimization)
-        // ════════════════════════════════════════════════════════════════
         Order test_order;
         test_order.price = quotes.bid_price;
         test_order.quantity = quotes.bid_size;
@@ -173,9 +153,7 @@ public:
         bool risk_passed = risk_.check_pre_trade_limits(test_order, current_position_);
         sample.tsc_risk_done = rdtscp();
         
-        // ════════════════════════════════════════════════════════════════
         // Phase 8: Order Encoding (20 ns with pre-serialization)
-        // ════════════════════════════════════════════════════════════════
         if (risk_passed) {
             // Simulate order encoding (pre-built templates)
             volatile uint8_t order_buffer[64];
@@ -183,9 +161,7 @@ public:
         }
         sample.tsc_encode_done = rdtscp();
         
-        // ════════════════════════════════════════════════════════════════
         // Phase 9: NIC TX (40 ns)
-        // ════════════════════════════════════════════════════════════════
         busy_wait_ns(40);
         sample.tsc_order_sent = rdtscp();
         
@@ -218,9 +194,9 @@ private:
     }
 };
 
-// ============================================================================
+// ====
 // Component-Level Benchmarks
-// ============================================================================
+// ====
 
 void run_component_benchmarks() {
     std::cout << "\n╔════════════════════════════════════════════════════════╗\n";
@@ -288,10 +264,7 @@ void run_component_benchmarks() {
     }, ITERATIONS);
 }
 
-// ============================================================================
 // Full System Benchmark (Tick-to-Trade)
-// ============================================================================
-
 void run_full_system_benchmark(size_t num_samples, const std::string& output_prefix) {
     std::cout << "\n╔════════════════════════════════════════════════════════╗\n";
     std::cout << "║  FULL TICK-TO-TRADE BENCHMARK                          ║\n";
@@ -305,7 +278,7 @@ void run_full_system_benchmark(size_t num_samples, const std::string& output_pre
     // Generate synthetic ticks
     std::cout << "Generating " << num_samples << " synthetic ticks...\n";
     auto ticks = MarketDataGenerator::generate_batch(num_samples);
-    std::cout << "✅ Ticks generated\n\n";
+    std::cout << " Ticks generated\n\n";
     
     std::cout << "Running full system benchmark...\n";
     
@@ -314,7 +287,7 @@ void run_full_system_benchmark(size_t num_samples, const std::string& output_pre
     for (size_t i = 0; i < 10000; ++i) {
         system.process_tick_instrumented(ticks[i % ticks.size()]);
     }
-    std::cout << "✅ Warmup complete\n\n";
+    std::cout << " Warmup complete\n\n";
     
     // Actual benchmark
     std::cout << "Benchmarking " << num_samples << " ticks...\n";
@@ -434,7 +407,7 @@ void generate_report(const std::vector<TickToTradeBenchmark::Sample>& samples,
                  << tsc_to_ns(breakdown.tx_app_to_dma) << "\n";
     }
     
-    std::cout << "\n✅ Results exported to:\n";
+    std::cout << "\n Results exported to:\n";
     std::cout << "   - " << output_prefix << "_total.csv\n";
     std::cout << "   - " << output_prefix << "_components.csv\n";
     std::cout << "   - " << output_prefix << "_raw_samples.csv\n\n";
@@ -476,10 +449,7 @@ void print_industry_comparison(const LatencyStats& stats) {
     std::cout << "\n";
 }
 
-// ============================================================================
 // Main Entry Point
-// ============================================================================
-
 void print_usage(const char* prog_name) {
     std::cout << "Usage: " << prog_name << " [options]\n\n";
     std::cout << "Options:\n";
@@ -494,7 +464,6 @@ void print_usage(const char* prog_name) {
 }
 
 int main(int argc, char* argv[]) {
-    // Parse command line arguments
     size_t num_samples = 1000000;  // Default: 1M samples
     std::string output_prefix = "benchmark";
     bool run_components = true;
@@ -527,10 +496,8 @@ int main(int argc, char* argv[]) {
     std::cout << "║     Industry-Standard Tick-to-Trade Measurement        ║\n";
     std::cout << "╚════════════════════════════════════════════════════════╝\n\n";
     
-    // System configuration
     configure_for_benchmarking();
     
-    // TSC calibration
     std::cout << "TSC Calibration: " << std::fixed << std::setprecision(2) 
               << (1.0 / g_tsc_to_ns / 1000.0) << " GHz\n\n";
     
@@ -544,11 +511,11 @@ int main(int argc, char* argv[]) {
         }
         
         std::cout << "\n╔════════════════════════════════════════════════════════╗\n";
-        std::cout << "║  BENCHMARK COMPLETE ✅                                 ║\n";
+        std::cout << "║  BENCHMARK COMPLETE                                  ║\n";
         std::cout << "╚════════════════════════════════════════════════════════╝\n\n";
         
     } catch (const std::exception& e) {
-        std::cerr << "\n❌ Benchmark failed: " << e.what() << "\n";
+        std::cerr << "\n Benchmark failed: " << e.what() << "\n";
         return 1;
     }
     
