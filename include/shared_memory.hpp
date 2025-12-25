@@ -13,10 +13,10 @@
 namespace hft {
 namespace shm {
 
-// ============================================================================
+// ====
 // Shared Memory Ring Buffer for IPC (C++/Rust interop)
 // Zero-copy communication between processes/languages
-// ============================================================================
+// ====
 
 template<typename T, size_t Capacity>
 struct alignas(64) SharedMemoryHeader {
@@ -40,9 +40,9 @@ class SharedMemoryRingBuffer {
                   "Capacity must be power of 2");
     
 public:
-    // ========================================================================
+    // 
     // Create or attach to shared memory segment
-    // ========================================================================
+    // 
     explicit SharedMemoryRingBuffer(const std::string& segment_name, bool create = true)
         : fd_(-1), mapped_region_(nullptr), total_size_(0) {
         
@@ -128,9 +128,9 @@ public:
         }
     }
     
-    // ========================================================================
+    // 
     // Producer: Write (SPSC semantics)
-    // ========================================================================
+    // 
     bool write(const T& item) {
         const uint64_t current_write = header_->write_seq.load(std::memory_order_relaxed);
         const uint64_t current_read = header_->read_seq.load(std::memory_order_acquire);
@@ -149,9 +149,9 @@ public:
         return true;
     }
     
-    // ========================================================================
+    // 
     // Consumer: Read (SPSC semantics)
-    // ========================================================================
+    // 
     bool read(T& item) {
         const uint64_t current_read = header_->read_seq.load(std::memory_order_relaxed);
         const uint64_t current_write = header_->write_seq.load(std::memory_order_acquire);
@@ -170,9 +170,9 @@ public:
         return true;
     }
     
-    // ========================================================================
+    // 
     // Status
-    // ========================================================================
+    // 
     size_t size() const {
         const uint64_t w = header_->write_seq.load(std::memory_order_acquire);
         const uint64_t r = header_->read_seq.load(std::memory_order_acquire);
@@ -196,10 +196,10 @@ private:
     std::string segment_name_;
 };
 
-// ============================================================================
+// ====
 // Shared Memory Market Data Feed (for multi-process architecture)
 // One process handles network I/O, others consume via shared memory
-// ============================================================================
+// ====
 
 using SharedMarketDataQueue = SharedMemoryRingBuffer<MarketTick, 32768>;
 
