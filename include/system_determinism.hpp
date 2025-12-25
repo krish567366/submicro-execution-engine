@@ -40,9 +40,9 @@
 namespace hft {
 namespace system_determinism {
 
-// ============================================================================
+// ====
 // CPU Isolation and Affinity
-// ============================================================================
+// ====
 
 /**
  * CPU Core Management
@@ -137,9 +137,9 @@ public:
     }
 };
 
-// ============================================================================
+// ====
 // Real-Time Priority
-// ============================================================================
+// ====
 
 /**
  * SCHED_FIFO Real-Time Scheduling
@@ -217,9 +217,9 @@ public:
     }
 };
 
-// ============================================================================
+// ====
 // Huge Pages (2MB/1GB)
-// ============================================================================
+// ====
 
 /**
  * Huge Pages for TLB Optimization
@@ -330,9 +330,9 @@ public:
     }
 };
 
-// ============================================================================
+// ====
 // Memory Locking (Prevent Swapping)
-// ============================================================================
+// ====
 
 /**
  * Lock Memory to Prevent Swapping
@@ -414,9 +414,9 @@ public:
     }
 };
 
-// ============================================================================
+// ====
 // NUMA-Aware Allocation
-// ============================================================================
+// ====
 
 /**
  * NUMA (Non-Uniform Memory Access) Optimization
@@ -482,9 +482,9 @@ public:
     }
 };
 
-// ============================================================================
+// ====
 // Complete System Setup
-// ============================================================================
+// ====
 
 /**
  * One-stop setup for deterministic system
@@ -580,9 +580,9 @@ public:
     }
 };
 
-// ============================================================================
+// ====
 // Performance Summary
-// ============================================================================
+// ====
 
 /**
  * System Determinism Performance Impact
@@ -604,14 +604,14 @@ public:
  * - Kernel scheduling: ~10-100μs
  * 
  * Production Requirements:
- * ✅ Isolated CPUs (isolcpus=2-5)
- * ✅ No-HZ full (nohz_full=2-5)
- * ✅ RCU nocbs (rcu_nocbs=2-5)
- * ✅ PREEMPT-RT kernel
- * ✅ Huge pages (2MB or 1GB)
- * ✅ Memory locking (mlockall)
- * ✅ NUMA binding
- * ✅ Real-time priority (SCHED_FIFO)
+ *  Isolated CPUs (isolcpus=2-5)
+ *  No-HZ full (nohz_full=2-5)
+ *  RCU nocbs (rcu_nocbs=2-5)
+ *  PREEMPT-RT kernel
+ *  Huge pages (2MB or 1GB)
+ *  Memory locking (mlockall)
+ *  NUMA binding
+ *  Real-time priority (SCHED_FIFO)
  * 
  * Result: Deterministic sub-microsecond performance with minimal jitter!
  */
