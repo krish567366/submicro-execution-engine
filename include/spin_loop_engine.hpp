@@ -32,9 +32,9 @@
 namespace hft {
 namespace spin_loop {
 
-// ============================================================================
+// ====
 // CPU Affinity and Priority Control
-// ============================================================================
+// ====
 
 /**
  * Pin thread to specific CPU core
@@ -106,9 +106,9 @@ inline bool set_realtime_priority() {
 #endif
 }
 
-// ============================================================================
+// ====
 // Math Look-Up Tables (LUTs)
-// ============================================================================
+// ====
 
 /**
  * Pre-computed natural logarithm table
@@ -298,9 +298,9 @@ inline double fast_ln_interp(double x) { return get_ln_lut().lookup_interp(x); }
 inline double fast_exp_interp(double x) { return get_exp_lut().lookup_interp(x); }
 inline double fast_sqrt_interp(double x) { return get_sqrt_lut().lookup_interp(x); }
 
-// ============================================================================
+// ====
 // Spin-Loop Engine
-// ============================================================================
+// ====
 
 /**
  * Single-threaded busy-wait engine for critical path processing
@@ -395,9 +395,9 @@ private:
     int cpu_id_;
 };
 
-// ============================================================================
+// ====
 // Performance Summary
-// ============================================================================
+// ====
 
 /**
  * Spin-Loop + Math LUT Optimization Impact
