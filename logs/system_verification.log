@@ -27,9 +27,9 @@ Memory:           Stack-allocated (no dynamic allocation in hot path)
 
 DETERMINISM GUARANTEES
 ----------------------------------------------------------------------
-✓ Fixed random seed (configurable)
-✓ Sequential event replay (no threading)
-✓ Bit-for-bit reproducible across runs
-✓ SHA256 checksums for data integrity
-✓ Event-by-event audit trail
+Fixed random seed (configurable)
+Sequential event replay (no threading)
+Bit-for-bit reproducible across runs
+SHA256 checksums for data integrity
+Event-by-event audit trail
 
