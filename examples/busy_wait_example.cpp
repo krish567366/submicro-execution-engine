@@ -47,24 +47,17 @@
 
 using namespace hft;
 
-// ============================================================================
 // Global State (shared between threads)
-// ============================================================================
-
 std::atomic<uint64_t> packets_received{0};
 std::atomic<uint64_t> orders_submitted{0};
 std::atomic<bool> shutdown_requested{false};
 
-// ============================================================================
 // Example 1: Minimal Busy-Wait Loop
-// ============================================================================
-
 void example_minimal_busy_wait() {
     std::cout << "\n═══════════════════════════════════════════════════════\n";
     std::cout << "Example 1: Minimal Busy-Wait Loop\n";
     std::cout << "═══════════════════════════════════════════════════════\n\n";
     
-    // Initialize custom NIC driver
     hardware::CustomNICDriver nic;
     
     if (!nic.initialize("/sys/bus/pci/devices/0000:01:00.0/resource0")) {
@@ -73,9 +66,9 @@ void example_minimal_busy_wait() {
         return;
     }
     
-    std::cout << "✓ NIC initialized (memory-mapped at BAR0)\n";
-    std::cout << "✓ Starting busy-wait loop (polls 100M times/second)\n";
-    std::cout << "✓ Press Ctrl+C to stop...\n\n";
+    std::cout << "NIC initialized (memory-mapped at BAR0)\n";
+    std::cout << "Starting busy-wait loop (polls 100M times/second)\n";
+    std::cout << "Press Ctrl+C to stop...\n\n";
     
     // THE BUSY-WAIT LOOP (NEVER RETURNS!)
     nic.busy_wait_loop([](uint8_t* packet, size_t len) {
@@ -93,10 +86,7 @@ void example_minimal_busy_wait() {
     // NEVER REACHED (infinite loop above)
 }
 
-// ============================================================================
 // Example 2: Full Trading System with Busy-Wait
-// ============================================================================
-
 void example_full_trading_system() {
     std::cout << "\n═══════════════════════════════════════════════════════\n";
     std::cout << "Example 2: Full Trading System (730 ns latency)\n";
@@ -104,15 +94,15 @@ void example_full_trading_system() {
     
     // Step 1: Pin to isolated CPU core
     system::CPUIsolation::pin_to_core(2);  // Core 2 isolated via isolcpus=2
-    std::cout << "✓ Pinned to CPU core 2 (isolated, no interrupts)\n";
+    std::cout << "Pinned to CPU core 2 (isolated, no interrupts)\n";
     
     // Step 2: Set real-time priority
     system::RealTimePriority::set_priority(49);  // SCHED_FIFO priority 49
-    std::cout << "✓ Set SCHED_FIFO priority 49 (kernel can't preempt)\n";
+    std::cout << "Set SCHED_FIFO priority 49 (kernel can't preempt)\n";
     
     // Step 3: Lock memory
     system::MemoryLocking::lock_all_memory();
-    std::cout << "✓ Locked all memory (no page faults)\n";
+    std::cout << "Locked all memory (no page faults)\n";
     
     // Step 4: Initialize NIC
     hardware::CustomNICDriver nic;
@@ -120,7 +110,7 @@ void example_full_trading_system() {
         std::cerr << "Failed to initialize NIC\n";
         return;
     }
-    std::cout << "✓ NIC initialized (custom driver, 30ns RX)\n";
+    std::cout << "NIC initialized (custom driver, 30ns RX)\n";
     
     // Step 5: Initialize trading components
     ArrayBasedOrderBook<100> order_book;
@@ -128,7 +118,7 @@ void example_full_trading_system() {
     AvellanedaStoikovStrategy strategy;
     hardware::CustomPacketFilter packet_filter;
     
-    std::cout << "✓ Trading components initialized\n";
+    std::cout << "Trading components initialized\n";
     std::cout << "\n";
     std::cout << "Starting busy-wait loop (100% CPU dedication)...\n";
     std::cout << "Polling rate: 100 million times/second\n";
@@ -138,30 +128,19 @@ void example_full_trading_system() {
     // THE BUSY-WAIT LOOP WITH FULL TRADING LOGIC
     nic.busy_wait_loop([&](uint8_t* packet, size_t len) {
         
-        // ═══════════════════════════════════════════════════════════════
         // Network RX (30 ns) - Already done by NIC driver!
-        // ═══════════════════════════════════════════════════════════════
         
         packets_received.fetch_add(1, std::memory_order_relaxed);
         
-        // ═══════════════════════════════════════════════════════════════
         // Parse packet (20 ns) - Strategy-specific parser
-        // ═══════════════════════════════════════════════════════════════
-        
         double price;
         uint32_t quantity;
         packet_filter.parse_market_data(packet, len, &price, &quantity);
         
-        // ═══════════════════════════════════════════════════════════════
         // Update order book (80 ns) - Flat array, O(1) lookup
-        // ═══════════════════════════════════════════════════════════════
-        
         order_book.update_bid(0, price, quantity);
         
-        // ═══════════════════════════════════════════════════════════════
         // Calculate features (250 ns) - SIMD vectorized
-        // ═══════════════════════════════════════════════════════════════
-        
         // Calculate OFI (10-level imbalance)
         double ofi = order_book.calculate_ofi(10);
         
@@ -174,30 +153,18 @@ void example_full_trading_system() {
         features[1] = static_cast<float>(spread);
         // ... more features ...
         
-        // ═══════════════════════════════════════════════════════════════
         // Neural network inference (270 ns) - AVX-512 vectorized
-        // ═══════════════════════════════════════════════════════════════
-        
         auto alpha = inference.predict(features.data());
         
-        // ═══════════════════════════════════════════════════════════════
         // Generate trading decision (70 ns) - Avellaneda-Stoikov
-        // ═══════════════════════════════════════════════════════════════
-        
         auto decision = strategy.compute(order_book, alpha[0], alpha[1]);
         
-        // ═══════════════════════════════════════════════════════════════
         // Risk checks (20 ns) - Branch-optimized
-        // ═══════════════════════════════════════════════════════════════
-        
         if (decision.should_trade && 
             decision.order_size > 0 && 
             decision.order_size < 1000) [[likely]] {
             
-            // ═══════════════════════════════════════════════════════════
             // Submit order (60 ns) - Pre-built template + NIC TX
-            // ═══════════════════════════════════════════════════════════
-            
             uint8_t order_packet[64];
             size_t order_len;
             
@@ -211,9 +178,7 @@ void example_full_trading_system() {
             orders_submitted.fetch_add(1, std::memory_order_relaxed);
         }
         
-        // ═══════════════════════════════════════════════════════════════
         // TOTAL LATENCY: 730 ns (0.73 μs)
-        // ═══════════════════════════════════════════════════════════════
         // 
         // Breakdown:
         // - Network RX: 30 ns
@@ -226,18 +191,13 @@ void example_full_trading_system() {
         // - Order TX: 60 ns
         // 
         // Result: 27% faster than Jane Street (<1.0 μs)
-        // 
-        // ═══════════════════════════════════════════════════════════════
         
     });  // ← NEVER RETURNS! Infinite busy-wait loop
     
     // NEVER REACHED
 }
 
-// ============================================================================
 // Example 3: Benchmark Busy-Wait Performance
-// ============================================================================
-
 void example_benchmark() {
     std::cout << "\n═══════════════════════════════════════════════════════\n";
     std::cout << "Example 3: Benchmark Busy-Wait Performance\n";
@@ -280,10 +240,7 @@ void example_benchmark() {
     std::cout << "CPU usage: 100% (one dedicated core)\n";
 }
 
-// ============================================================================
 // Example 4: Monitoring Thread (shows stats while busy-wait runs)
-// ============================================================================
-
 void monitoring_thread() {
     std::cout << "\n═══════════════════════════════════════════════════════\n";
     std::cout << "Monitoring Stats (updated every second)\n";
@@ -328,8 +285,8 @@ void example_with_monitoring() {
         return;
     }
     
-    std::cout << "✓ Busy-wait loop running on core 2 (100% CPU)\n";
-    std::cout << "✓ Monitor thread running on core 0 (shows stats)\n\n";
+    std::cout << "Busy-wait loop running on core 2 (100% CPU)\n";
+    std::cout << "Monitor thread running on core 0 (shows stats)\n\n";
     
     // Pin monitor thread to different core
     system::CPUIsolation::pin_to_core(0);
@@ -347,10 +304,7 @@ void example_with_monitoring() {
     monitor.join();
 }
 
-// ============================================================================
 // Main: Choose Example
-// ============================================================================
-
 int main(int argc, char** argv) {
     std::cout << "\n";
     std::cout << "╔═══════════════════════════════════════════════════════╗\n";
@@ -444,11 +398,11 @@ int main(int argc, char** argv) {
  * ║   Busy-Wait Loop: Sub-Microsecond Trading Secret     ║
  * ╚═══════════════════════════════════════════════════════╝
  * 
- * ✓ Pinned to CPU core 2 (isolated, no interrupts)
- * ✓ Set SCHED_FIFO priority 49 (kernel can't preempt)
- * ✓ Locked all memory (no page faults)
- * ✓ NIC initialized (custom driver, 30ns RX)
- * ✓ Trading components initialized
+ * Pinned to CPU core 2 (isolated, no interrupts)
+ * Set SCHED_FIFO priority 49 (kernel can't preempt)
+ * Locked all memory (no page faults)
+ * NIC initialized (custom driver, 30ns RX)
+ * Trading components initialized
  * 
  * Starting busy-wait loop (100% CPU dedication)...
  * Polling rate: 100 million times/second
