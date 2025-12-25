@@ -47,7 +47,7 @@ compile_file() {
     
     if ${CXX} ${CXXFLAGS} ${INCLUDES} ${extra_flags} \
         -o "${output}" "${source}" ${LIBS}; then
-        echo -e "${GREEN}✓ Success: ${output}${NC}"
+        echo -e "${GREEN}Success: ${output}${NC}"
         echo ""
         return 0
     else
@@ -87,7 +87,7 @@ HEADERS=(
 MISSING=0
 for header in "${HEADERS[@]}"; do
     if [ -f "${header}" ]; then
-        echo -e "${GREEN}✓ ${header}${NC}"
+        echo -e "${GREEN}${header}${NC}"
     else
         echo -e "${RED}✗ Missing: ${header}${NC}"
         MISSING=$((MISSING + 1))
@@ -157,7 +157,7 @@ EOF
             -o "build/test_${header_name}.o" 2>&1 | grep -i "error" > /dev/null; then
             echo -e "${RED}✗ Compilation errors in ${header}${NC}"
         else
-            echo -e "${GREEN}✓ ${header} compiles successfully${NC}"
+            echo -e "${GREEN}${header} compiles successfully${NC}"
         fi
         
         # Clean up test files
@@ -178,18 +178,18 @@ echo ""
 echo "Built executables:"
 echo "─────────────────────────────────────────────────────────────"
 if [ -f "bin/trading_app" ]; then
-    echo -e "${GREEN}✓ bin/trading_app${NC}"
+    echo -e "${GREEN}bin/trading_app${NC}"
     ls -lh bin/trading_app
 fi
 if [ -f "bin/busy_wait_example" ]; then
-    echo -e "${GREEN}✓ bin/busy_wait_example${NC}"
+    echo -e "${GREEN}bin/busy_wait_example${NC}"
     ls -lh bin/busy_wait_example
 fi
 echo ""
 
 echo "Header files validated:"
 echo "─────────────────────────────────────────────────────────────"
-echo -e "${GREEN}✓ ${#HEADERS[@]} header files checked${NC}"
+echo -e "${GREEN}${#HEADERS[@]} header files checked${NC}"
 echo ""
 
 echo -e "${YELLOW}Next Steps:${NC}"
