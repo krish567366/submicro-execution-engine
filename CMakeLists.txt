@@ -1,25 +1,25 @@
 cmake_minimum_required(VERSION 3.15)
 project(UltraLowLatencyHFT VERSION 1.0.0 LANGUAGES CXX)
 
-# ============================================================================
+# ====
 # C++ Standard and Compiler Requirements
-# ============================================================================
+# ====
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_CXX_EXTENSIONS OFF)
 
-# ============================================================================
+# ====
 # Build Type (default to Release with optimizations)
-# ============================================================================
+# ====
 if(NOT CMAKE_BUILD_TYPE)
     set(CMAKE_BUILD_TYPE Release)
 endif()
 
 message(STATUS "Build type: ${CMAKE_BUILD_TYPE}")
 
-# ============================================================================
+# ====
 # Ultra-Low-Latency Compiler Flags
-# ============================================================================
+# ====
 if(CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang")
     # Aggressive optimization flags for sub-microsecond latency
     set(CMAKE_CXX_FLAGS_RELEASE 
@@ -62,9 +62,9 @@ if(ENABLE_TSAN)
     add_link_options(-fsanitize=thread)
 endif()
 
-# ============================================================================
+# ====
 # Platform-specific optimizations
-# ============================================================================
+# ====
 if(UNIX AND NOT APPLE)
     # Linux-specific: prepare for kernel bypass and DPDK
     add_compile_definitions(
@@ -78,29 +78,29 @@ if(UNIX AND NOT APPLE)
     find_package(Threads REQUIRED)
 endif()
 
-# ============================================================================
+# ====
 # Include Directories
-# ============================================================================
+# ====
 include_directories(${PROJECT_SOURCE_DIR}/include)
 
-# ============================================================================
+# ====
 # Source Files
-# ============================================================================
+# ====
 set(SOURCES
     src/main.cpp
 )
 
-# ============================================================================
+# ====
 # Executable Target
-# ============================================================================
+# ====
 add_executable(hft_system ${SOURCES})
 
 # Backtest Demo with Institutional Logging
 add_executable(backtest_demo src/backtest_demo.cpp)
 
-# ============================================================================
+# ====
 # Linking
-# ============================================================================
+# ====
 if(UNIX)
     target_link_libraries(hft_system PRIVATE Threads::Threads)
     target_link_libraries(backtest_demo PRIVATE Threads::Threads)
@@ -125,10 +125,10 @@ if(UNIX)
     endif()
 endif()
 
-# ============================================================================
+# ====
 # Memory Allocator Options (for production)
 # Uncomment to use high-performance allocators
-# ============================================================================
+# ====
 # option(USE_JEMALLOC "Use jemalloc allocator" OFF)
 # option(USE_TCMALLOC "Use TCMalloc allocator" OFF)
 # 
@@ -148,9 +148,9 @@ endif()
 #     endif()
 # endif()
 
-# ============================================================================
+# ====
 # CPU Affinity and NUMA (optional)
-# ============================================================================
+# ====
 option(ENABLE_NUMA "Enable NUMA optimizations" OFF)
 if(ENABLE_NUMA)
     find_library(NUMA_LIB numa)
@@ -161,9 +161,9 @@ if(ENABLE_NUMA)
     endif()
 endif()
 
-# ============================================================================
+# ====
 # DPDK Support (optional - for production kernel bypass)
-# ============================================================================
+# ====
 option(ENABLE_DPDK "Enable DPDK integration" OFF)
 if(ENABLE_DPDK)
     find_package(PkgConfig REQUIRED)
@@ -176,23 +176,23 @@ if(ENABLE_DPDK)
     message(STATUS "DPDK enabled")
 endif()
 
-# ============================================================================
+# ====
 # Installation
-# ============================================================================
+# ====
 install(TARGETS hft_system DESTINATION bin)
 
-# ============================================================================
+# ====
 # Testing (optional)
-# ============================================================================
+# ====
 option(BUILD_TESTS "Build unit tests" OFF)
 if(BUILD_TESTS)
     enable_testing()
     add_subdirectory(tests)
 endif()
 
-# ============================================================================
+# ====
 # Documentation
-# ============================================================================
+# ====
 option(BUILD_DOCS "Build documentation" OFF)
 if(BUILD_DOCS)
     find_package(Doxygen)
@@ -206,9 +206,9 @@ if(BUILD_DOCS)
     endif()
 endif()
 
-# ============================================================================
+# ====
 # Print Configuration Summary
-# ============================================================================
+# ====
 message(STATUS "")
 message(STATUS "=== Ultra-Low-Latency HFT System Configuration ===")
 message(STATUS "Compiler: ${CMAKE_CXX_COMPILER_ID} ${CMAKE_CXX_COMPILER_VERSION}")
