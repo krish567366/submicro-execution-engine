@@ -9,11 +9,11 @@
 namespace hft {
 namespace zerocopy {
 
-// ============================================================================
+// ====
 // Zero-Copy Protocol Decoders
 // Direct memory-mapped parsing from NIC ring buffer (no intermediate copies)
 // Target: Reduce packet parsing from 100ns to 50ns
-// ============================================================================
+// ====
 
 // Packed binary protocol structures (aligned with exchange formats)
 // These structs overlay directly on network packet bytes
@@ -64,9 +64,9 @@ struct BinaryQuoteMessage {
 
 #pragma pack(pop)  // Restore default packing
 
-// ============================================================================
+// ====
 // Zero-Copy Decoder: Parse directly from ring buffer memory
-// ============================================================================
+// ====
 class ZeroCopyDecoder {
 public:
     ZeroCopyDecoder() = default;
@@ -131,10 +131,10 @@ public:
     }
 };
 
-// ============================================================================
+// ====
 // Symbol ID Mapping (for zero-copy symbol lookup)
 // Pre-computed hash map: symbol_string -> symbol_id
-// ============================================================================
+// ====
 class SymbolMapper {
 public:
     SymbolMapper() {
