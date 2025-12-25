@@ -236,9 +236,9 @@ private:
     }
 };
 
-// ============================================================================
+// ====
 // Optimized Order Tracking (hash map instead of std::map)
-// ============================================================================
+// ====
 struct FastTrackedOrder {
     uint64_t order_id;
     double price;
@@ -248,10 +248,10 @@ struct FastTrackedOrder {
     FastTrackedOrder() : order_id(0), price(0.0), quantity(0.0), is_bid(true) {}
 };
 
-// ============================================================================
+// ====
 // Fast LOB Reconstructor (drop-in replacement for OrderBookReconstructor)
 // Uses array-based storage instead of std::map
-// ============================================================================
+// ====
 class FastLOBReconstructor {
 public:
     FastLOBReconstructor(const std::string& symbol) 
