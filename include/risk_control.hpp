@@ -8,16 +8,16 @@
 
 namespace hft {
 
-// ============================================================================
+// ====
 // Adaptive Risk Control System
 // Implements regime-based position limits and circuit breakers
-// ============================================================================
+// ====
 
 class RiskControl {
 public:
-    // ========================================================================
+    // 
     // Constructor
-    // ========================================================================
+    // 
     explicit RiskControl(
         int64_t max_position = 1000,        // Maximum absolute position
         double max_loss_threshold = 10000.0, // Maximum loss before halt
@@ -35,10 +35,10 @@ public:
         max_daily_trades_(10000) {
     }
     
-    // ========================================================================
+    // 
     // Pre-trade risk checks
     // Returns true if order passes all checks
-    // ========================================================================
+    // 
     bool check_pre_trade_limits(const Order& order, int64_t current_position) const {
         // Check 1: Kill switch
         if (kill_switch_triggered_.load(std::memory_order_acquire)) {
@@ -83,12 +83,12 @@ public:
         return true;
     }
     
-    // ========================================================================
+    // 
     // Set regime multiplier based on market conditions
     // Dynamically scales position limits
     // 
     // volatility_index: normalized volatility measure (0.0 = calm, 1.0+ = stressed)
-    // ========================================================================
+    // 
     void set_regime_multiplier(double volatility_index) {
         MarketRegime new_regime;
         double multiplier;
@@ -121,24 +121,24 @@ public:
         current_max_position_.store(new_limit, std::memory_order_release);
     }
     
-    // ========================================================================
+    // 
     // Trigger kill switch (irreversible trading halt)
-    // ========================================================================
+    // 
     void trigger_kill_switch() const {
         kill_switch_triggered_.store(true, std::memory_order_release);
         // In production: would also send alerts, close positions, etc.
     }
     
-    // ========================================================================
+    // 
     // Check if kill switch is active
-    // ========================================================================
+    // 
     bool is_kill_switch_triggered() const {
         return kill_switch_triggered_.load(std::memory_order_acquire);
     }
     
-    // ========================================================================
+    // 
     // Update P&L (called after fills)
-    // ========================================================================
+    // 
     void update_pnl(double pnl_delta) {
         // Atomic add
         double current = total_pnl_.load(std::memory_order_relaxed);
@@ -154,9 +154,9 @@ public:
         }
     }
     
-    // ========================================================================
+    // 
     // Update position (called after fills)
-    // ========================================================================
+    // 
     void update_position(Side side, uint64_t quantity) {
         const int64_t delta = (side == Side::BUY) ? 
             static_cast<int64_t>(quantity) : -static_cast<int64_t>(quantity);
@@ -169,24 +169,24 @@ public:
         }
     }
     
-    // ========================================================================
+    // 
     // Increment trade counter
-    // ========================================================================
+    // 
     void increment_trade_count() {
         daily_trade_count_.fetch_add(1, std::memory_order_relaxed);
     }
     
-    // ========================================================================
+    // 
     // Reset daily counters (called at start of trading day)
-    // ========================================================================
+    // 
     void reset_daily_counters() {
         daily_trade_count_.store(0, std::memory_order_release);
         total_pnl_.store(0.0, std::memory_order_release);
     }
     
-    // ========================================================================
+    // 
     // Reset kill switch (requires manual intervention)
-    // ========================================================================
+    // 
     void reset_kill_switch(const std::string& authorization_code) {
         // In production: would require proper authentication
         if (authorization_code == "EMERGENCY_RESET") {
@@ -194,10 +194,10 @@ public:
         }
     }
     
-    // ========================================================================
+    // 
     // Calculate position-adjusted risk limit for quote sizing
     // Returns: safe quote size given current position
-    // ========================================================================
+    // 
     double get_safe_quote_size(int64_t current_position, double base_size) const {
         const int64_t max_pos = current_max_position_.load(std::memory_order_acquire);
         const int64_t available_capacity = max_pos - std::abs(current_position);
@@ -211,10 +211,10 @@ public:
         return base_size * std::min(capacity_ratio, 1.0);
     }
     
-    // ========================================================================
+    // 
     // Check if position unwinding is needed
     // Returns: recommended unwind size (positive = sell, negative = buy)
-    // ========================================================================
+    // 
     int64_t get_unwind_recommendation(int64_t current_position) const {
         const int64_t max_pos = current_max_position_.load(std::memory_order_acquire);
         const int64_t abs_pos = std::abs(current_position);
@@ -228,9 +228,9 @@ public:
         return 0;  // No unwind needed
     }
     
-    // ========================================================================
+    // 
     // Getters
-    // ========================================================================
+    // 
     int64_t get_max_position() const {
         return current_max_position_.load(std::memory_order_acquire);
     }
@@ -256,17 +256,17 @@ public:
     }
     
 private:
-    // ========================================================================
+    // 
     // Configuration (immutable after construction)
-    // ========================================================================
+    // 
     const int64_t base_max_position_;
     const double max_loss_threshold_;
     const double max_order_value_;
     const int64_t max_daily_trades_;
     
-    // ========================================================================
+    // 
     // Atomic state variables (thread-safe)
-    // ========================================================================
+    // 
     mutable std::atomic<bool> kill_switch_triggered_;
     std::atomic<int64_t> current_max_position_;
     std::atomic<double> regime_multiplier_;
