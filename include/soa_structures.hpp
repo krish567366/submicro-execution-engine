@@ -44,9 +44,9 @@
 namespace hft {
 namespace soa {
 
-// ============================================================================
+// ====
 // SOA Order Book (SIMD-optimized layout)
-// ============================================================================
+// ====
 
 template<size_t MaxLevels = 100>
 struct alignas(64) SOA_OrderBook {
@@ -165,9 +165,9 @@ struct alignas(64) SOA_OrderBook {
     }
 };
 
-// ============================================================================
+// ====
 // SOA Feature Vector (SIMD-optimized layout)
-// ============================================================================
+// ====
 
 /**
  * Feature vector storage optimized for SIMD operations
@@ -300,9 +300,9 @@ struct alignas(64) SOA_FeatureVector {
     }
 };
 
-// ============================================================================
+// ====
 // SOA Time Series (for historical data)
-// ============================================================================
+// ====
 
 template<size_t WindowSize = 1000>
 struct alignas(64) SOA_TimeSeries {
@@ -370,9 +370,9 @@ struct alignas(64) SOA_TimeSeries {
     }
 };
 
-// ============================================================================
+// ====
 // Performance Comparison Summary
-// ============================================================================
+// ====
 
 /**
  * SOA vs AOS Performance (Measured on Intel i9 / Apple M2)
