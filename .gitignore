@@ -28,19 +28,8 @@ live_trading_config.toml
 **/fill_history_*.db
 **/account_statements_*.pdf
 
-# Proprietary alpha signals (CORE LOGIC - Never commit these files)
-# ALL .hpp FILES CONTAIN PROPRIETARY TRADING LOGIC
-
-# Block ALL header files (they contain the real strategy logic)
-*.hpp
-include/*.hpp
-**/*.hpp
-
-# Block all C++ source files with real logic
-src/main.cpp
-src/backtest_demo.cpp
-src/*.cpp
-**/*.cpp
+# NOTE: Source code is now included in repository under proprietary license
+# Commercial use prohibited - written permission required
 
 # -----------------------------------------------------------------------------
 # UNPROFESSIONAL MARKETING FILES (Never commit these)
