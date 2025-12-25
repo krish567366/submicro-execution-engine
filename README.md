@@ -416,9 +416,9 @@ If this research and codebase helps with your work, please consider sponsoring:
 [![GitHub Sponsors](https://img.shields.io/badge/Sponsor-krish567366-ff69b4?style=for-the-badge&logo=github)](https://github.com/sponsors/krish567366)
 
 Your support helps fund:
-- 🔬 **Research**: Advanced algorithms and optimization techniques
+-  **Research**: Advanced algorithms and optimization techniques
 - 🖥️ **Hardware**: High-end testing equipment and servers
-- 📚 **Documentation**: Comprehensive guides and tutorials
+-  **Documentation**: Comprehensive guides and tutorials
 - 🌐 **Open Source**: Keeping parts of this project freely available
 
 ---
