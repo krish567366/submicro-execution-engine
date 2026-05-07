@@ -22,7 +22,7 @@ logs/
 sha256sum -c MANIFEST.sha256
 
 # 2. Compute latencies offline
-python3 ../verify_latency.py
+python3 ../scripts/verify_latency.py
 
 # 3. Inspect raw PCAP (requires tcpdump)
 tcpdump -r raw_capture_20251215.pcap -tt -n
@@ -45,7 +45,7 @@ Manifest proves integrity
 
 ## Latency Computation
 
-Latencies are computed by `verify_latency.py` which correlates:
+Latencies are computed by `scripts/verify_latency.py` which correlates:
 
 - NIC hardware timestamps (when packet hit wire)
 - Strategy TSC values (CPU cycle counter)

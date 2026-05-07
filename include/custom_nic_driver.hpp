@@ -149,14 +149,7 @@ constexpr uint32_t TX_DD_BIT = (1u << 0);  // Descriptor Done (packet sent)
 
 class CustomNICDriver {
 public:
-    CustomNICDriver() 
-        : bar0_base_(nullptr)
-        , rx_ring_(nullptr)
-        , tx_ring_(nullptr)
-        , rx_head_(0)
-        , tx_tail_(0)
-        , initialized_(false)
-    {}
+    CustomNICDriver();
     
     /**
      * Initialize driver by memory-mapping NIC hardware
@@ -166,234 +159,24 @@ public:
      * 
      * Performance: One-time setup cost, ~10μs
      */
-    bool initialize(const char* pci_device) {
-        // Step 1: Open PCI resource file (NIC's memory-mapped registers)
-        int fd = open(pci_device, O_RDWR | O_SYNC);
-        if (fd < 0) [[unlikely]] {
-            return false;
-        }
-        
-        // Step 2: mmap BAR0 (NIC's register space) into our address space
-        // Now we can read/write hardware registers as if they were normal memory!
-        size_t bar0_size = 0x800000;  // 8 MB (typical NIC BAR size)
-        bar0_base_ = static_cast<volatile uint8_t*>(
-            mmap(nullptr, bar0_size, PROT_READ | PROT_WRITE, MAP_SHARED, fd, 0)
-        );
-        close(fd);  // File descriptor no longer needed after mmap
-        
-        if (bar0_base_ == MAP_FAILED) [[unlikely]] {
-            return false;
-        }
-        
-        // Step 3: Allocate descriptor rings (DMA-able memory)
-        rx_ring_ = allocate_dma_memory<RXDescriptor>(RX_RING_SIZE);
-        tx_ring_ = allocate_dma_memory<TXDescriptor>(TX_RING_SIZE);
-        
-        if (!rx_ring_ || !tx_ring_) [[unlikely]] {
-            return false;
-        }
-        
-        // Step 4: Allocate packet buffers (DMA-able memory)
-        for (size_t i = 0; i < RX_RING_SIZE; i++) {
-            rx_buffers_[i] = allocate_dma_memory<uint8_t>(PACKET_BUFFER_SIZE);
-            if (!rx_buffers_[i]) [[unlikely]] {
-                return false;
-            }
-            
-            // Initialize RX descriptor to point to this buffer
-            rx_ring_[i].buffer_addr = virt_to_phys(rx_buffers_[i]);
-            rx_ring_[i].status = 0;
-        }
-        
-        for (size_t i = 0; i < TX_RING_SIZE; i++) {
-            tx_buffers_[i] = allocate_dma_memory<uint8_t>(PACKET_BUFFER_SIZE);
-        }
-        
-        // Step 5: Program hardware registers (tell NIC where our rings are)
-        program_rx_ring();
-        program_tx_ring();
-        
-        initialized_ = true;
-        return true;
-    }
+    bool initialize(const char* pci_device);
     
-    /**
-     * Poll for received packet (ULTRA-FAST PATH)
-     * 
-     * Performance: 20-50 ns (just memory loads!)
-     * 
-     * What happens:
-     * 1. Read RX_HEAD register (1 memory load, ~3-5ns)
-     * 2. Check if descriptor DD bit set (1 memory load, ~3-5ns)
-     * 3. Read packet buffer (DMA, already in L3 cache, ~10-20ns)
-     * 
-     * Total: 20-50 ns end-to-end!
-     */
-    inline bool poll_rx(uint8_t** packet_data, size_t* packet_len) {
-        // Read hardware RX head pointer (where HW wrote last packet)
-        uint32_t hw_head = read_reg32(reg::RX_HEAD);
-        
-        // Check if we have new packets
-        if (hw_head == rx_head_) [[unlikely]] {
-            return false;  // No new packets
-        }
-        
-        // HOT PATH: Read descriptor at current head position
-        RXDescriptor& desc = rx_ring_[rx_head_];
-        
-        // Check descriptor done bit (did hardware write this packet?)
-        if (!(desc.status_flags & RX_DD_BIT)) [[unlikely]] {
-            return false;  // Packet not ready yet
-        }
-        
-        // Packet is ready! Read it from DMA buffer
-        *packet_data = rx_buffers_[rx_head_];
-        *packet_len = desc.pkt_len;
-        
-        // Clear DD bit and re-post descriptor to hardware
-        desc.status_flags = 0;
-        
-        // Advance head pointer (circular buffer)
-        rx_head_ = (rx_head_ + 1) & (RX_RING_SIZE - 1);
-        
-        // Update hardware tail pointer (tell NIC this buffer is available)
-        write_reg32(reg::RX_TAIL, rx_head_);
-        
-        return true;
-    }
+    // Poll for received packet (ULTRA-FAST PATH)
+    inline bool poll_rx(uint8_t** packet_data, size_t* packet_len);
     
-    /**
-     * @param callback Function to process each received packet
-     * @note This function NEVER returns! It's an infinite loop.
-     * @note Requires CPU isolation (isolcpus kernel parameter)
-     * @note Requires real-time priority (SCHED_FIFO)
-     */
+    // Busy-wait loop for packet processing
     template<typename Callback>
-    [[noreturn]] void busy_wait_loop(Callback&& callback) {
-        uint8_t* packet_data;
-        size_t packet_len;
-        
-        // ═══════════════════════════════════════════════════════════════════
-        // THE BUSY-WAIT LOOP: The Heart of Ultra-Low-Latency Trading
-        // ═══════════════════════════════════════════════════════════════════
-        
-        while (true) {  // ← INFINITE LOOP - NEVER SLEEPS!
-            
-            uint32_t hw_head = read_reg32(reg::RX_HEAD);
-            
-            if (hw_head != rx_head_) [[likely]] {  // ← Branch hint: packets are common!
-                
-                // HOT PATH: Read descriptor
-                RXDescriptor& desc = rx_ring_[rx_head_];
-                
-                // Check descriptor done bit (hardware wrote packet?)
-                if (desc.status_flags & RX_DD_BIT) [[likely]] {
-                    
-                    // ═══════════════════════════════════════════════════════
-                    // Step 3: Packet available! Read it (10-20 ns)
-                    // ═══════════════════════════════════════════════════════
-                    
-                    packet_data = rx_buffers_[rx_head_];
-                    packet_len = desc.pkt_len;
-                    
-                    // Clear DD bit and re-post descriptor
-                    desc.status_flags = 0;
-                    
-                    // Advance ring buffer
-                    rx_head_ = (rx_head_ + 1) & (RX_RING_SIZE - 1);
-                    write_reg32(reg::RX_TAIL, rx_head_);
-                    
-            
-                    callback(packet_data, packet_len);
-                }
-            }
-            
-        }
-        }  // ← Loop back to top immediately!
-        
-        // NEVER REACHED (infinite loop)
-    }
+    [[noreturn]] void busy_wait_loop(Callback&& callback);
     
-    /**
-     * Busy-wait for SPECIFIC number of packets (for testing/benchmarking)
-     * 
-     * This variant processes N packets then returns (useful for latency tests)
-     * 
-     * Performance: Same as busy_wait_loop (20-50 ns per poll)
-     * 
-     * @param callback Function to process each packet
-     * @param max_packets Stop after processing this many packets
-     * @return Number of packets processed
-     */
+    // Busy-wait for N packets
     template<typename Callback>
-    size_t busy_wait_n_packets(Callback&& callback, size_t max_packets) {
-        uint8_t* packet_data;
-        size_t packet_len;
-        size_t packets_processed = 0;
-        
-        // Busy-wait until we've processed max_packets
-        while (packets_processed < max_packets) {
-            
-            // Poll NIC (20-50 ns per attempt)
-            if (poll_rx(&packet_data, &packet_len)) [[likely]] {
-                
-                // Process packet
-                callback(packet_data, packet_len);
-                packets_processed++;
-            }
-            
-            // NO SLEEP! Loop immediately to check again
-            // This burns CPU but eliminates interrupt latency
-        }
-        
-        return packets_processed;
-    }
+    size_t busy_wait_n_packets(Callback&& callback, size_t max_packets);
     
-    /**
-     * Submit packet for transmission (ULTRA-FAST PATH)
-     * 
-     * Performance: 30-60 ns
-     * 
-     * What happens:
-     * 1. Write packet to DMA buffer (memcpy, ~20-40ns for 64-byte packet)
-     * 2. Write TX descriptor (1 memory store, ~3-5ns)
-     * 3. Update TX_TAIL register (1 MMIO write, ~10-15ns)
-     * 
-     * Total: 30-60 ns end-to-end!
-     */
-    inline bool submit_tx(const uint8_t* packet_data, size_t packet_len) {
-        if (packet_len > PACKET_BUFFER_SIZE) [[unlikely]] {
-            return false;
-        }
-        
-        // Copy packet to DMA buffer
-        std::memcpy(tx_buffers_[tx_tail_], packet_data, packet_len);
-        
-        // Setup TX descriptor
-        TXDescriptor& desc = tx_ring_[tx_tail_];
-        desc.buffer_addr = virt_to_phys(tx_buffers_[tx_tail_]);
-        desc.cmd_type_len = (packet_len << 16) | (1 << 0);  // Length + EOP bit
-        desc.olinfo_status = 0;
-        
-        // Advance tail pointer
-        uint32_t new_tail = (tx_tail_ + 1) & (TX_RING_SIZE - 1);
-        
-        // Write tail register to trigger DMA (this starts transmission!)
-        write_reg32(reg::TX_TAIL, new_tail);
-        
-        tx_tail_ = new_tail;
-        return true;
-    }
+    // Submit packet for transmission
+    inline bool submit_tx(const uint8_t* packet_data, size_t packet_len);
     
-    /**
-     * Check if TX completed (for buffer reuse)
-     * 
-     * Performance: 10-20 ns
-     */
-    inline bool poll_tx_completion() {
-        uint32_t hw_head = read_reg32(reg::TX_HEAD);
-        return (hw_head != tx_tail_);  // TX ring not full
-    }
+    // Check if TX completed
+    inline bool poll_tx_completion();
 
 private:
     // Memory-mapped hardware registers (BAR0)
@@ -550,6 +333,66 @@ private:
     }
 };
 
+// Constructor implementation
+inline CustomNICDriver::CustomNICDriver() 
+    : bar0_base_(nullptr)
+    , rx_ring_(nullptr)
+    , tx_ring_(nullptr)
+    , rx_head_(0)
+    , tx_tail_(0)
+    , initialized_(false)
+{}
+
+// Initialize implementation
+inline bool CustomNICDriver::initialize(const char* pci_device) {
+    // Step 1: Open PCI resource file (NIC's memory-mapped registers)
+    int fd = open(pci_device, O_RDWR | O_SYNC);
+    if (fd < 0) {
+        return false;
+    }
+    
+    // Step 2: mmap BAR0 (NIC's register space) into our address space
+    size_t bar0_size = 0x800000;  // 8 MB (typical NIC BAR size)
+    bar0_base_ = static_cast<volatile uint8_t*>(
+        mmap(nullptr, bar0_size, PROT_READ | PROT_WRITE, MAP_SHARED, fd, 0)
+    );
+    close(fd);
+    
+    if (bar0_base_ == MAP_FAILED) {
+        return false;
+    }
+    
+    // Step 3: Allocate descriptor rings
+    rx_ring_ = allocate_dma_memory<RXDescriptor>(RX_RING_SIZE);
+    tx_ring_ = allocate_dma_memory<TXDescriptor>(TX_RING_SIZE);
+    
+    if (!rx_ring_ || !tx_ring_) {
+        return false;
+    }
+    
+    // Step 4: Allocate packet buffers
+    for (size_t i = 0; i < RX_RING_SIZE; i++) {
+        rx_buffers_[i] = allocate_dma_memory<uint8_t>(PACKET_BUFFER_SIZE);
+        if (!rx_buffers_[i]) {
+            return false;
+        }
+        
+        rx_ring_[i].buffer_addr = virt_to_phys(rx_buffers_[i]);
+        rx_ring_[i].status = 0;
+    }
+    
+    for (size_t i = 0; i < TX_RING_SIZE; i++) {
+        tx_buffers_[i] = allocate_dma_memory<uint8_t>(PACKET_BUFFER_SIZE);
+    }
+    
+    // Step 5: Program hardware registers
+    program_rx_ring();
+    program_tx_ring();
+    
+    initialized_ = true;
+    return true;
+}
+
 class CustomPacketFilter {
 public:
     /**
@@ -630,6 +473,110 @@ public:
         // Just 2 memory stores into a pre-built template.
     }
 };
+
+// ============================================================================
+// IMPLEMENTATION OF METHODS THAT REFERENCE PRIVATE MEMBERS
+// ============================================================================
+
+inline bool CustomNICDriver::poll_rx(uint8_t** packet_data, size_t* packet_len) {
+    // Read hardware RX head pointer (where HW wrote last packet)
+    uint32_t hw_head = read_reg32(reg::RX_HEAD);
+    
+    // Check if we have new packets
+    if (hw_head == rx_head_) {
+        return false;  // No new packets
+    }
+    
+    // HOT PATH: Read descriptor at current head position
+    RXDescriptor& desc = rx_ring_[rx_head_];
+    
+    // Check descriptor done bit (did hardware write this packet?)
+    if (!(desc.status_flags & RX_DD_BIT)) {
+        return false;  // Packet not ready yet
+    }
+    
+    // Packet is ready! Read it from DMA buffer
+    *packet_data = rx_buffers_[rx_head_];
+    *packet_len = desc.pkt_len;
+    
+    // Clear DD bit and re-post descriptor to hardware
+    desc.status_flags = 0;
+    
+    // Advance head pointer (circular buffer)
+    rx_head_ = (rx_head_ + 1) & (RX_RING_SIZE - 1);
+    
+    // Update hardware tail pointer (tell NIC this buffer is available)
+    write_reg32(reg::RX_TAIL, rx_head_);
+    
+    return true;
+}
+
+template<typename Callback>
+[[noreturn]] void CustomNICDriver::busy_wait_loop(Callback&& callback) {
+    uint8_t* packet_data;
+    size_t packet_len;
+    
+    while (true) {
+        uint32_t hw_head = read_reg32(reg::RX_HEAD);
+        
+        if (hw_head != rx_head_) {
+            RXDescriptor& desc = rx_ring_[rx_head_];
+            
+            if (desc.status_flags & RX_DD_BIT) {
+                packet_data = rx_buffers_[rx_head_];
+                packet_len = desc.pkt_len;
+                
+                desc.status_flags = 0;
+                
+                rx_head_ = (rx_head_ + 1) & (RX_RING_SIZE - 1);
+                write_reg32(reg::RX_TAIL, rx_head_);
+                
+                callback(packet_data, packet_len);
+            }
+        }
+    }
+}
+
+template<typename Callback>
+size_t CustomNICDriver::busy_wait_n_packets(Callback&& callback, size_t max_packets) {
+    uint8_t* packet_data;
+    size_t packet_len;
+    size_t packets_processed = 0;
+    
+    while (packets_processed < max_packets) {
+        if (poll_rx(&packet_data, &packet_len)) {
+            callback(packet_data, packet_len);
+            packets_processed++;
+        }
+    }
+    
+    return packets_processed;
+}
+
+inline bool CustomNICDriver::submit_tx(const uint8_t* packet_data, size_t packet_len) {
+    if (packet_len > PACKET_BUFFER_SIZE) {
+        return false;
+    }
+    
+    std::memcpy(tx_buffers_[tx_tail_], packet_data, packet_len);
+    
+    TXDescriptor& desc = tx_ring_[tx_tail_];
+    desc.buffer_addr = virt_to_phys(tx_buffers_[tx_tail_]);
+    desc.cmd_type_len = (packet_len << 16) | (1 << 0);
+    desc.olinfo_status = 0;
+    
+    uint32_t new_tail = (tx_tail_ + 1) & (TX_RING_SIZE - 1);
+    
+    write_reg32(reg::TX_TAIL, new_tail);
+    
+    tx_tail_ = new_tail;
+    return true;
+}
+
+inline bool CustomNICDriver::poll_tx_completion() {
+    uint32_t hw_head = read_reg32(reg::TX_HEAD);
+    return (hw_head != tx_tail_);
+}
 
 } // namespace hardware
 } // namespace hft

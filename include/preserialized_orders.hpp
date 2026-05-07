@@ -1,256 +1,102 @@
-#pragma once
+#if defined(__x86_64__) || defined(_M_X64)
+#include <immintrin.h>
+#endif
 
-#include "common_types.hpp"
-#include <cstring>
 #include <cstdint>
 #include <array>
-#include <atomic>
+#include <cstring>
 
 namespace hft {
-namespace preserialized {
+namespace networking {
 
-#pragma pack(push, 1)
-
-// Binary order message header (FIX/SBE-like)
-struct OrderMessageHeader {
-    uint32_t sequence_number;    // Updated per order
-    uint16_t message_type;       // Fixed: NEW_ORDER
-    uint16_t message_length;     // Fixed: sizeof(BinaryNewOrderMessage)
-    uint64_t client_timestamp;   // Updated per order
-    uint32_t client_id;          // Fixed at initialization
-    uint32_t session_id;         // Fixed at initialization
-};
-
-// Complete new order message
-struct BinaryNewOrderMessage {
-    OrderMessageHeader header;
-    uint64_t client_order_id;    // DYNAMIC - patched at runtime
-    uint32_t symbol_id;          // Fixed per symbol
-    uint8_t side;                // DYNAMIC - patched at runtime (BUY/SELL)
-    uint8_t order_type;          // Fixed: LIMIT
-    uint8_t time_in_force;       // Fixed: GTC/IOC/FOK
-    uint8_t padding;
-    double price;                // DYNAMIC - patched at runtime
-    double quantity;             // DYNAMIC - patched at runtime
-    uint32_t checksum;           // Updated per order (optional)
-};
-
-// Cancel order message
-struct BinaryCancelOrderMessage {
-    OrderMessageHeader header;
-    uint64_t client_order_id;    // DYNAMIC - patched at runtime
-    uint64_t original_order_id;  // DYNAMIC - patched at runtime
-    uint32_t symbol_id;          // Fixed per symbol
-    uint32_t padding;
-};
-
-#pragma pack(pop)
-
-// Order Template: Pre-serialized buffer with patch points
+/**
+ * Pre-Serialized Order Template with Incremental Checksumming
+ */
+template<size_t PayloadSize = 64>
 class OrderTemplate {
 public:
-    OrderTemplate() : buffer_size_(0) {
-        buffer_.fill(0);
-    }
-    
-    // Initialize template for a specific symbol and order type
-    void initialize_limit_order_template(
-        uint32_t client_id,
-        uint32_t session_id,
-        uint32_t symbol_id,
-        uint8_t time_in_force
-    ) {
-        // Pre-fill the static parts
-        BinaryNewOrderMessage msg;
-        std::memset(&msg, 0, sizeof(msg));
-        
-        // Static header fields
-        msg.header.message_type = 100;  // NEW_ORDER
-        msg.header.message_length = sizeof(BinaryNewOrderMessage);
-        msg.header.client_id = client_id;
-        msg.header.session_id = session_id;
-        
-        // Static order fields
-        msg.symbol_id = symbol_id;
-        msg.order_type = 1;  // LIMIT
-        msg.time_in_force = time_in_force;
-        
-        // Copy to template buffer
-        std::memcpy(buffer_.data(), &msg, sizeof(msg));
-        buffer_size_ = sizeof(msg);
-    }
-    
-    // Fast path: Patch dynamic fields only (~20ns)
-    // This is the hot path - called for every order
-    inline void patch_and_send(
-        uint64_t order_id,
-        Side side,
-        double price,
-        double quantity,
-        uint64_t timestamp_ns,
-        void* output_buffer
-    ) const {
-        // Copy pre-serialized template (1 cache line, ~10ns)
-        std::memcpy(output_buffer, buffer_.data(), buffer_size_);
-        
-        // Patch dynamic fields directly in output buffer (~10ns)
-        auto* msg = reinterpret_cast<BinaryNewOrderMessage*>(output_buffer);
-        
-        msg->header.client_timestamp = timestamp_ns;
-        msg->client_order_id = order_id;
-        msg->side = (side == Side::BUY) ? 0 : 1;
-        msg->price = price;
-        msg->quantity = quantity;
-        
-        // Optional: Update sequence number (if needed)
-        // msg->header.sequence_number = next_sequence_number();
-    }
-    
-    // Get buffer size
-    size_t get_buffer_size() const { return buffer_size_; }
-    
-private:
-    std::array<uint8_t, 256> buffer_;  // Pre-serialized template
-    size_t buffer_size_;
-};
+    struct alignas(64) PacketBuffer {
+        uint8_t eth_dst[6];
+        uint8_t eth_src[6];
+        uint16_t eth_type;
+        uint8_t ip_ver_ihl;
+        uint8_t ip_tos;
+        uint16_t ip_len;
+        uint16_t ip_id;
+        uint16_t ip_frag;
+        uint8_t ip_ttl;
+        uint8_t ip_proto;
+        uint16_t ip_csum;
+        uint32_t ip_src;
+        uint32_t ip_dst;
+        uint16_t udp_src;
+        uint16_t udp_dst;
+        uint16_t udp_len;
+        uint16_t udp_csum;
+        uint8_t payload[PayloadSize];
+    };
 
-// Template Pool: Per-symbol, per-order-type templates
-class OrderTemplatePool {
-public:
-    OrderTemplatePool(uint32_t client_id, uint32_t session_id)
-        : client_id_(client_id), session_id_(session_id), next_order_id_(1) {}
-    
-    // Initialize templates for a symbol
-    void initialize_symbol_templates(uint32_t symbol_id, const std::string& symbol_name) {
-        // Limit order templates (GTC, IOC, FOK)
-        auto& limit_gtc = limit_gtc_templates_[symbol_id];
-        limit_gtc.initialize_limit_order_template(client_id_, session_id_, symbol_id, 0);  // GTC
-        
-        auto& limit_ioc = limit_ioc_templates_[symbol_id];
-        limit_ioc.initialize_limit_order_template(client_id_, session_id_, symbol_id, 1);  // IOC
-        
-        auto& limit_fok = limit_fok_templates_[symbol_id];
-        limit_fok.initialize_limit_order_template(client_id_, session_id_, symbol_id, 2);  // FOK
+    OrderTemplate() : price_offset_(0), qty_offset_(0) {
+        std::memset(&buffer_, 0, sizeof(buffer_));
     }
-    
-    // Submit limit order with pre-serialized template (FAST PATH)
-    // Total latency: ~30ns (template patch 20ns + allocation 10ns)
-    inline size_t submit_limit_order_gtc(
-        uint32_t symbol_id,
-        Side side,
-        double price,
-        double quantity,
-        void* output_buffer
-    ) {
-        uint64_t order_id = next_order_id_.fetch_add(1, std::memory_order_relaxed);
-        uint64_t timestamp_ns = std::chrono::steady_clock::now().time_since_epoch().count();
-        
-        const auto& tmpl = limit_gtc_templates_[symbol_id];
-        tmpl.patch_and_send(order_id, side, price, quantity, timestamp_ns, output_buffer);
-        
-        return tmpl.get_buffer_size();
-    }
-    
-    inline size_t submit_limit_order_ioc(
-        uint32_t symbol_id,
-        Side side,
-        double price,
-        double quantity,
-        void* output_buffer
-    ) {
-        uint64_t order_id = next_order_id_.fetch_add(1, std::memory_order_relaxed);
-        uint64_t timestamp_ns = std::chrono::steady_clock::now().time_since_epoch().count();
-        
-        const auto& tmpl = limit_ioc_templates_[symbol_id];
-        tmpl.patch_and_send(order_id, side, price, quantity, timestamp_ns, output_buffer);
-        
-        return tmpl.get_buffer_size();
-    }
-    
-    // Cancel order (also uses pre-serialized template)
-    inline size_t submit_cancel_order(
-        uint32_t symbol_id,
-        uint64_t original_order_id,
-        void* output_buffer
-    ) {
-        uint64_t cancel_order_id = next_order_id_.fetch_add(1, std::memory_order_relaxed);
-        
-        // Pre-serialized cancel template
-        BinaryCancelOrderMessage msg;
-        std::memset(&msg, 0, sizeof(msg));
-        
-        msg.header.message_type = 101;  // CANCEL_ORDER
-        msg.header.message_length = sizeof(BinaryCancelOrderMessage);
-        msg.header.client_id = client_id_;
-        msg.header.session_id = session_id_;
-        msg.header.client_timestamp = std::chrono::steady_clock::now().time_since_epoch().count();
-        
-        msg.client_order_id = cancel_order_id;
-        msg.original_order_id = original_order_id;
-        msg.symbol_id = symbol_id;
-        
-        std::memcpy(output_buffer, &msg, sizeof(msg));
-        return sizeof(msg);
-    }
-    
-private:
-    uint32_t client_id_;
-    uint32_t session_id_;
-    std::atomic<uint64_t> next_order_id_;
-    
-    // Template storage per symbol
-    std::unordered_map<uint32_t, OrderTemplate> limit_gtc_templates_;
-    std::unordered_map<uint32_t, OrderTemplate> limit_ioc_templates_;
-    std::unordered_map<uint32_t, OrderTemplate> limit_fok_templates_;
-};
 
-// ====
-// Optimized Order Submission Path
-// Combines template patching with lock-free queue insertion
-class FastOrderSubmitter {
-public:
-    FastOrderSubmitter(uint32_t client_id, uint32_t session_id)
-        : template_pool_(client_id, session_id) {}
-    
-    void initialize_symbol(uint32_t symbol_id, const std::string& symbol_name) {
-        template_pool_.initialize_symbol_templates(symbol_id, symbol_name);
+    void init(uint32_t src_ip, uint32_t dst_ip, uint16_t src_port, uint16_t dst_port) {
+        buffer_.ip_ver_ihl = 0x45;
+        buffer_.ip_proto = 17;
+        buffer_.ip_src = src_ip;
+        buffer_.ip_dst = dst_ip;
+        buffer_.udp_src = src_port;
+        buffer_.udp_dst = dst_port;
+        price_offset_ = 42 + 0;
+        qty_offset_ = 42 + 8;
     }
-    
-    // Ultra-fast order submission (~30ns total)
-    // Breakdown:
-    //   - Template patch: 20ns
-    //   - Order ID generation: 5ns (atomic fetch_add)
-    //   - Timestamp: 5ns (rdtsc or steady_clock)
-    inline size_t submit_limit_order(
-        uint32_t symbol_id,
-        Side side,
-        double price,
-        double quantity,
-        bool immediate_or_cancel,
-        void* output_buffer
-    ) {
-        if (immediate_or_cancel) {
-            return template_pool_.submit_limit_order_ioc(
-                symbol_id, side, price, quantity, output_buffer
-            );
-        } else {
-            return template_pool_.submit_limit_order_gtc(
-                symbol_id, side, price, quantity, output_buffer
-            );
+
+    inline const uint8_t* fast_prepare(double new_price, uint32_t new_qty, size_t& len) {
+        uint64_t old_price_bits = *reinterpret_cast<uint64_t*>(&buffer_.payload[0]);
+        uint64_t new_price_bits;
+        std::memcpy(&new_price_bits, &new_price, 8);
+        
+        if (old_price_bits != new_price_bits) {
+            *reinterpret_cast<double*>(&buffer_.payload[0]) = new_price;
+            update_csum_word(0, (uint16_t)old_price_bits, (uint16_t)new_price_bits);
+            update_csum_word(2, (uint16_t)(old_price_bits>>16), (uint16_t)(new_price_bits>>16));
+            update_csum_word(4, (uint16_t)(old_price_bits>>32), (uint16_t)(new_price_bits>>32));
+            update_csum_word(6, (uint16_t)(old_price_bits>>48), (uint16_t)(new_price_bits>>48));
         }
+
+        len = sizeof(PacketBuffer);
+        return reinterpret_cast<uint8_t*>(&buffer_);
     }
-    
-    inline size_t submit_cancel(
-        uint32_t symbol_id,
-        uint64_t original_order_id,
-        void* output_buffer
-    ) {
-        return template_pool_.submit_cancel_order(symbol_id, original_order_id, output_buffer);
-    }
-    
+
 private:
-    OrderTemplatePool template_pool_;
+    PacketBuffer buffer_;
+    size_t price_offset_;
+    size_t qty_offset_;
+
+    inline void update_csum_word(size_t byte_offset_relative, uint16_t old_val, uint16_t new_val) {
+        uint32_t sum = (~buffer_.udp_csum & 0xFFFF);
+        sum += (~old_val & 0xFFFF);
+        sum += new_val;
+        while (sum >> 16) sum = (sum & 0xFFFF) + (sum >> 16);
+        buffer_.udp_csum = ~sum;
+    }
 };
 
-} // namespace preserialized
+/**
+ * Kernel Convenience Wrapper
+ */
+class PreserializedOrderTemplates {
+public:
+    inline void prepare_buy(double price, uint64_t qty, char** out_pkt, size_t* out_len) {
+        size_t len = 0;
+        const uint8_t* pkt = buy_tpl_.fast_prepare(price, (uint32_t)qty, len);
+        *out_pkt = (char*)pkt;
+        *out_len = len;
+    }
+
+private:
+    OrderTemplate<64> buy_tpl_;
+};
+
+} // namespace networking
 } // namespace hft

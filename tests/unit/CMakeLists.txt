@@ -10,7 +10,8 @@ find_package(OpenSSL REQUIRED)
 # Find all test source files
 file(GLOB TEST_SOURCES "*.cpp")
 
-# Exclude test_hawkes_engine due to header file compilation error
+# Exclude original test_hawkes_engine due to header file compilation error
+# Use test_hawkes_engine_fixed instead which uses only available public methods
 list(FILTER TEST_SOURCES EXCLUDE REGEX "test_hawkes_engine\\.cpp")
 
 # Create test executables

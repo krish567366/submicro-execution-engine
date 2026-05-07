@@ -24,8 +24,22 @@
 [![C++17](https://img.shields.io/badge/C%2B%2B-17-blue?style=for-the-badge&logo=cplusplus)](.)
 [![Rust](https://img.shields.io/badge/Rust-1.70%2B-orange?style=for-the-badge&logo=rust)](.)
 [![License](https://img.shields.io/badge/license-Proprietary-red?style=for-the-badge)](LICENSE)
+[![x86-64 Only](https://img.shields.io/badge/Platform-x86--64-critical?style=for-the-badge&logo=intel)](BUILD_REQUIREMENTS.md)
 [![PRs Welcome](https://img.shields.io/badge/PRs-welcome-brightgreen?style=for-the-badge)](.)
-[![GitHub Sponsors](https://img.shields.io/badge/Sponsor-krish567366-ff69b4?style=for-the-badge&logo=github)](https://github.com/sponsors/krish567366)
+
+---
+
+## ⚠️ IMPORTANT: Platform Requirements
+
+**This system requires x86-64 architecture (Intel/AMD) with AVX-512 support.**
+
+- ✅ **Linux x86-64**: Full support, < 1μs latency
+- ❌ **ARM64/Apple Silicon**: Not supported (missing AVX-512, TSX, RDTSC)
+- ❌ **Windows**: Not recommended (need PREEMPT_RT kernel)
+
+**📖 See [BUILD_REQUIREMENTS.md](BUILD_REQUIREMENTS.md) for full details**
+
+---
 
 <p>
 <a href="https://submicro.krishnabajpai.me/">Live Demo</a> •

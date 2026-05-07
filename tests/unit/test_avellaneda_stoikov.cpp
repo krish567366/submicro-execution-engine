@@ -25,7 +25,7 @@ void test_basic_quote_calculation() {
     assert(quotes.spread > 0.0);
     assert(quotes.mid_price == 100.0);
 
-    std::cout << "✓ Basic quote calculation passed" << std::endl;
+    std::cout << "Basic quote calculation passed" << std::endl;
 }
 
 void test_inventory_skew() {
@@ -50,7 +50,7 @@ void test_inventory_skew() {
     // Negative inventory should also have higher spread
     assert(quotes_negative.spread >= quotes_zero.spread);
 
-    std::cout << "✓ Inventory skew adjustment passed" << std::endl;
+    std::cout << "Inventory skew adjustment passed" << std::endl;
 }
 
 void test_latency_cost() {
@@ -72,7 +72,7 @@ void test_latency_cost() {
     assert(should_quote == true);
     assert(should_not_quote == false);
 
-    std::cout << "✓ Latency cost incorporation passed" << std::endl;
+    std::cout << "Latency cost incorporation passed" << std::endl;
 }
 
 void test_parameter_updates() {
@@ -90,7 +90,7 @@ void test_parameter_updates() {
     strategy.set_volatility(0.3);
     assert(std::abs(strategy.get_volatility() - 0.3) < 1e-6);
 
-    std::cout << "✓ Parameter updates passed" << std::endl;
+    std::cout << "Parameter updates passed" << std::endl;
 }
 
 void test_edge_cases() {
@@ -110,7 +110,7 @@ void test_edge_cases() {
     assert(quotes_invalid.bid_price == 0.0);
     assert(quotes_invalid.ask_price == 0.0);
 
-    std::cout << "✓ Edge cases passed" << std::endl;
+    std::cout << "Edge cases passed" << std::endl;
 }
 
 int main() {
@@ -125,14 +125,14 @@ int main() {
         test_edge_cases();
 
         std::cout << std::endl;
-        std::cout << "🎉 All tests passed!" << std::endl;
+        std::cout << " All tests passed!" << std::endl;
         return 0;
 
     } catch (const std::exception& e) {
-        std::cerr << "❌ Test failed: " << e.what() << std::endl;
+        std::cerr << " Test failed: " << e.what() << std::endl;
         return 1;
     } catch (...) {
-        std::cerr << "❌ Test failed with unknown exception" << std::endl;
+        std::cerr << " Test failed with unknown exception" << std::endl;
         return 1;
     }
 }

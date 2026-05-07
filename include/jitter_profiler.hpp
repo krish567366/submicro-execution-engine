@@ -2,107 +2,103 @@
 
 #include "common_types.hpp"
 #include <array>
-#include <atomic>
+#include <cstdint>
+#include <string>
+#include <iostream>
+#include <vector>
 #include <algorithm>
 
+// Unified TSC reading function for all platforms
+#if defined(__x86_64__) || defined(_M_X64) || defined(__i386__) || defined(_M_IX86)
+    #include <x86intrin.h>
+    namespace hft { namespace timing {
+        inline uint64_t read_tsc() { return __rdtsc(); }
+    }}
+#elif defined(__aarch64__) || defined(__arm64__) || defined(_M_ARM64)
+    // ARM64: Use CNTVCT_EL0 (Virtual Count register)
+    namespace hft { namespace timing {
+        inline uint64_t read_tsc() {
+            uint64_t val;
+            asm volatile("mrs %0, cntvct_el0" : "=r"(val));
+            return val;
+        }
+    }}
+#else
+    #error "Unsupported architecture - need cycle counter implementation"
+#endif
+
 namespace hft {
+namespace profiling {
 
 /**
- * Jitter Profiler for Low-Latency Systems
+ * Nano-Scale Jitter Profiler
  * 
- * Purpose: Detect and measure "Micro-Stalls" in the hot path. 
- * Traditional average latency hides tail events. 
- * This class builds a histogram of busy-wait loop cycle deltas. 
- * If the loop is interrupted by the kernel, SMI, or GC, the delta will spike.
+ * Measures "Inter-Instruction Latency".
+ * Used to detect:
+ * 1. CPU throttling / frequency scaling changes
+ * 2. Unlucky cache line evictions (LLC miss = 50ns spike)
+ * 3. OS scheduler preemption (1000ns+ spike)
+ * 
+ * Usage:
+ * {
+ *    auto scope = JitterProbe("OrderLogic");
+ *    // ... code ...
+ * }
  */
 class JitterProfiler {
 public:
-    static constexpr size_t HISTOGRAM_BUCKETS = 20;
-    static constexpr uint64_t BUCKET_WIDTH_CYCLES = 100; // 100 cycles per bucket
+    static constexpr size_t MAX_SAMPLES = 100000;
 
-    JitterProfiler() : last_tsc_(0), max_jitter_cycles_(0), total_samples_(0), stalled_samples_(0) {
-        histogram_.fill(0);
+    static JitterProfiler& instance() {
+        static JitterProfiler inst;
+        return inst;
     }
-    
-    // Call this inside the busy-wait loop
-    inline void mark() {
-        uint64_t now = rdtsc();
-        
-        if (last_tsc_ > 0) {
-            uint64_t delta = now - last_tsc_;
-            
-            // Record if delta is suspicious (e.g. > 1000 cycles)
-            if (delta > 1000) {
-                 stalled_samples_++;
-                 if (delta > max_jitter_cycles_) {
-                     max_jitter_cycles_ = delta;
-                 }
-            }
-            
-            // Add to histogram
-            size_t bucket = delta / BUCKET_WIDTH_CYCLES;
-            if (bucket >= HISTOGRAM_BUCKETS) bucket = HISTOGRAM_BUCKETS - 1;
-            histogram_[bucket]++;
-            
-            total_samples_++;
-        }
-        
-        last_tsc_ = now;
-    }
-    
-    // Software Prefetch wrapper (GCC/Clang built-in)
-    // Hint: 0=Non-temporal, 1=Low, 2=Moderate, 3=High locality (L1)
-    template<typename T>
-    static inline void prefetch_L1(const T* ptr) {
-        __builtin_prefetch(ptr, 0, 3);
-    }
-    
-    static inline void prefetch_next_line(const void* ptr) {
-        __builtin_prefetch(reinterpret_cast<const char*>(ptr) + 64, 0, 3);
-    }
-    
-    void print_report() const {
-        printf("\n=== Jitter Analysis (Inter-Cycle Gaps) ===\n");
-        printf("Total Samples: %lu\n", total_samples_);
-        printf("Stalled Samples (>1000 cycles): %lu\n", stalled_samples_);
-        printf("Max Jitter: %lu cycles (~%.2f ns)\n", max_jitter_cycles_, max_jitter_cycles_ / 3.0); // approx 3GHz
-        
-        printf("Histogram:\n");
-        for(size_t i=0; i<HISTOGRAM_BUCKETS; ++i) {
-            if (histogram_[i] > 0) {
-                printf("[%lu-%lu cycles]: %lu\n", 
-                       i * BUCKET_WIDTH_CYCLES, 
-                       (i+1) * BUCKET_WIDTH_CYCLES, 
-                       histogram_[i]);
-            }
-        }
-        if (stalled_samples_ > 0) {
-            printf("[CRITICAL] System interrupts detected! Check CPU isolation.\n");
-        } else {
-             printf("[PASS] Clean execution profile.\n");
+
+    void record(const char* tag, uint64_t cycles) {
+        if (s_idx_ < MAX_SAMPLES) {
+            samples_[s_idx_++] = {tag, cycles};
         }
     }
-    
+
+    void dump_report() {
+        // Group by tag and print stats
+        // ... (simplified)
+        std::cout << "JITTER REPORT (Cycles):" << std::endl;
+        // Logic to compute simple stats
+        // In prod this would be dumping binary to disk
+    }
+
 private:
-    uint64_t last_tsc_;
-    uint64_t max_jitter_cycles_;
-    uint64_t total_samples_;
-    uint64_t stalled_samples_;
-    std::array<uint64_t, HISTOGRAM_BUCKETS> histogram_;
+    struct Sample {
+        const char* tag;
+        uint64_t cycles;
+    };
     
-    inline uint64_t rdtsc() {
-        #if defined(__x86_64__) || defined(_M_X64)
-            unsigned int lo, hi;
-            __asm__ __volatile__ ("rdtsc" : "=a" (lo), "=d" (hi));
-            return ((uint64_t)hi << 32) | lo;
-        #elif defined(__aarch64__)
-            uint64_t val;
-            __asm__ __volatile__("mrs %0, cntvct_el0" : "=r" (val));
-            return val;
-        #else
-            return 0;
-        #endif
+    std::vector<Sample> samples_; // Pre-allocated in constructor
+    size_t s_idx_ = 0;
+
+    JitterProfiler() {
+        samples_.resize(MAX_SAMPLES);
     }
 };
 
+class JitterProbe {
+public:
+    inline JitterProbe(const char* name) : name_(name) {
+        start_ = hft::timing::read_tsc();
+    }
+
+    inline ~JitterProbe() {
+        uint64_t delta = hft::timing::read_tsc() - start_;
+        // Only record if it looks like an outlier (> 200 cycles?)
+        // Or record everything for histogram
+        JitterProfiler::instance().record(name_, delta);
+    }
+
+private:
+    const char* name_;
+    uint64_t start_;
+};
+
+}
 }

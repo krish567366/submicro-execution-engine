@@ -3,7 +3,7 @@
 Latency Correlation Auditor
 Verifies timing claims by correlating multi-layer timestamps
 
-Usage: python3 verify_latency.py logs/
+Usage: python3 scripts/verify_latency.py logs/
 
 This script computes latencies offline from raw timestamps.
 It does NOT trust inline latency claims.

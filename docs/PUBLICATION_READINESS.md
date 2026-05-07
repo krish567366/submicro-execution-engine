@@ -7,7 +7,9 @@
 
 ##  What We PUBLISH
 
-#- [----- [--- [x] No performance tier claims[x] No competitor comparisons[x] Marketing language stripped] Comments reviewed for IP leakage[x] Placeholder API keys removed[x] Generic venue names only[x] No proprietary alpha signals[x] No exchange credentials in code] Benchmark results with error bounds# 1. Execution Engine Skeleton
+#- [----- [--- 
+[x] No performance tier claims[x] No competitor comparisons
+[x] Marketing language stripped Comments reviewed for IP leakage[x] Placeholder API keys removed[x] Generic venue names only[x] No proprietary alpha signals[x] No exchange credentials in code] Benchmark results with error bounds# 1. Execution Engine Skeleton
 - Lock-free SPSC ring buffer implementations
 - Cache-aligned data structures
 - Zero-copy data paths
@@ -24,7 +26,7 @@
 - TSC-based component profiling
 - Multi-layer timestamp correlation
 - Offline verification tooling
-- Files: `verify_latency.py`, `logs/*.log`
+- Files: `scripts/verify_latency.py`, `logs/*.log`
 
 ### 4. Lock-Free Data Structures
 - SPSC ring buffer (C++ and Rust)
@@ -214,10 +216,10 @@ TOTAL (p99)             921 ns      Tail latency
 ### Determinism Proof
 ```bash
 # Run 1
-./run_backtest.py --seed=42 > run1.log
+scripts/run_backtest.py --seed=42 > run1.log
 
 # Run 2
-./run_backtest.py --seed=42 > run2.log
+scripts/run_backtest.py --seed=42 > run2.log
 
 # Compare TSC traces
 diff <(grep "EVENT" run1.log) <(grep "EVENT" run2.log)
@@ -248,7 +250,7 @@ logs/
 cd logs && sha256sum -c MANIFEST.sha256
 
 # 2. Correlate timestamps
-python3 ../verify_latency.py
+python3 ../scripts/verify_latency.py
 
 # 3. Check determinism
 diff <(grep EVENT strategy_trace.log) <(grep EVENT ../backup/strategy_trace.log)

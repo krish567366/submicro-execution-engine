@@ -1,403 +1,189 @@
 #pragma once
 
-#include <vector>
+#include "common_types.hpp"
 #include <array>
 #include <cmath>
-#include <cstdint>
-#include <cstring>
+#include <algorithm>
 
-// Platform-specific SIMD intrinsics
-#if defined(__AVX512F__)
+// AVX-512 Detection
+#if defined(__x86_64__) || defined(_M_X64)
     #include <immintrin.h>
-    #define HAS_AVX512 1
-    #define SIMD_WIDTH 8  // 8 doubles per register
-#elif defined(__AVX2__)
-    #include <immintrin.h>
-    #define HAS_AVX2 1
-    #define SIMD_WIDTH 4  // 4 doubles per register
-#elif defined(__aarch64__) || defined(_M_ARM64)
-    #include <arm_neon.h>
-    #define HAS_NEON 1
-    #define SIMD_WIDTH 2  // 2 doubles per register
-#else
-    #define SIMD_WIDTH 1  // Scalar fallback
+    #if defined(__AVX512F__)
+        #define USE_AVX512_NN 1
+    #endif
 #endif
 
 namespace hft {
-
-class VectorizedInferenceEngine {
-public:
-    static constexpr size_t INPUT_SIZE = 10;
-    static constexpr size_t HIDDEN_SIZE = 16;
-    static constexpr size_t OUTPUT_SIZE = 3;
-
-    VectorizedInferenceEngine() {
-        // Initialize weights and biases (normally loaded from model file)
-        // Using random initialization for demonstration
-        initialize_weights();
-    }
-
-    /**
-     * Forward pass inference using SIMD vectorization
-     * 
-     * @param features Input feature vector (size 10)
-     * @return Output signal probabilities: [buy, sell, hold]
-     * 
-     * Performance: ~250ns on modern CPU with AVX-512
-     *             ~280ns with AVX2
-     *             ~320ns with ARM NEON
-     */
-    struct alignas(64) InferenceOutput {
-        double buy_signal;
-        double sell_signal;
-        double hold_signal;
-        
-        inline int get_action() const {
-            if (buy_signal > sell_signal && buy_signal > hold_signal) return 1;  // BUY
-            if (sell_signal > buy_signal && sell_signal > hold_signal) return -1; // SELL
-            return 0; // HOLD
-        }
-    };
-
-    inline InferenceOutput predict(const double* features) {
-        // Layer 1: Input → Hidden (10 → 16)
-        // Compute: hidden = tanh(W1 × input + b1)
-        compute_hidden_layer_simd(features);
-
-        // Layer 2: Hidden → Output (16 → 3)
-        // Compute: output = softmax(W2 × hidden + b2)
-        compute_output_layer_simd();
-
-        return {output_buffer_[0], output_buffer_[1], output_buffer_[2]};
-    }
-
-    // Pre-warm the cache by loading weights
-    inline void warm_cache() {
-        volatile double sum = 0.0;
-        for (size_t i = 0; i < INPUT_SIZE * HIDDEN_SIZE; i++) {
-            sum += weights_input_hidden_[i];
-        }
-        for (size_t i = 0; i < HIDDEN_SIZE * OUTPUT_SIZE; i++) {
-            sum += weights_hidden_output_[i];
-        }
-    }
-
-private:
-    // Weight matrices (cache-aligned for optimal SIMD access)
-    alignas(64) std::array<double, INPUT_SIZE * HIDDEN_SIZE> weights_input_hidden_;
-    alignas(64) std::array<double, HIDDEN_SIZE * OUTPUT_SIZE> weights_hidden_output_;
-    
-    // Bias vectors
-    alignas(64) std::array<double, HIDDEN_SIZE> bias_hidden_;
-    alignas(64) std::array<double, OUTPUT_SIZE> bias_output_;
-    
-    // Intermediate computation buffers
-    alignas(64) std::array<double, HIDDEN_SIZE> hidden_buffer_;
-    alignas(64) std::array<double, OUTPUT_SIZE> output_buffer_;
-
-    void initialize_weights() {
-        // Initialize with small random values (normally loaded from trained model)
-        for (size_t i = 0; i < weights_input_hidden_.size(); i++) {
-            weights_input_hidden_[i] = (double(i % 100) / 100.0) * 0.1 - 0.05;
-        }
-        for (size_t i = 0; i < weights_hidden_output_.size(); i++) {
-            weights_hidden_output_[i] = (double(i % 100) / 100.0) * 0.1 - 0.05;
-        }
-        bias_hidden_.fill(0.01);
-        bias_output_.fill(0.01);
-    }
-
-    /**
-     * Layer 1: Input → Hidden with SIMD vectorization
-     * 
-     * Computation: hidden[j] = tanh(Σ(W[j,i] × input[i]) + bias[j])
-     * 
-     * SIMD Strategy:
-     * - Process SIMD_WIDTH inputs simultaneously using FMA (fused multiply-add)
-     * - AVX-512: 8 doubles per cycle
-     * - AVX2: 4 doubles per cycle
-     * - NEON: 2 doubles per cycle
-     */
-    inline void compute_hidden_layer_simd(const double* input) {
-#if defined(HAS_AVX512)
-        // AVX-512 path: Process 8 doubles at once
-        for (size_t j = 0; j < HIDDEN_SIZE; j++) {
-            __m512d sum = _mm512_setzero_pd();
-            const double* weights_row = &weights_input_hidden_[j * INPUT_SIZE];
-            
-            // Vectorized dot product: sum += weights[i] * input[i]
-            for (size_t i = 0; i < INPUT_SIZE; i += 8) {
-                __m512d w = _mm512_loadu_pd(&weights_row[i]);
-                __m512d x = _mm512_loadu_pd(&input[i]);
-                sum = _mm512_fmadd_pd(w, x, sum);  // Fused multiply-add
-            }
-            
-            // Horizontal reduction: sum all 8 elements
-            double result = _mm512_reduce_add_pd(sum);
-            result += bias_hidden_[j];
-            
-            // Fast tanh approximation
-            hidden_buffer_[j] = fast_tanh_simd(result);
-        }
-
-#elif defined(HAS_AVX2)
-        // AVX2 path: Process 4 doubles at once
-        for (size_t j = 0; j < HIDDEN_SIZE; j++) {
-            __m256d sum = _mm256_setzero_pd();
-            const double* weights_row = &weights_input_hidden_[j * INPUT_SIZE];
-            
-            // Vectorized dot product
-            for (size_t i = 0; i < INPUT_SIZE; i += 4) {
-                __m256d w = _mm256_loadu_pd(&weights_row[i]);
-                __m256d x = _mm256_loadu_pd(&input[i]);
-                sum = _mm256_fmadd_pd(w, x, sum);  // Fused multiply-add
-            }
-            
-            // Horizontal reduction
-            __m128d sum_high = _mm256_extractf128_pd(sum, 1);
-            __m128d sum_low = _mm256_castpd256_pd128(sum);
-            __m128d sum128 = _mm_add_pd(sum_low, sum_high);
-            __m128d sum_shuf = _mm_shuffle_pd(sum128, sum128, 1);
-            sum128 = _mm_add_pd(sum128, sum_shuf);
-            
-            double result = _mm_cvtsd_f64(sum128);
-            result += bias_hidden_[j];
-            
-            hidden_buffer_[j] = fast_tanh_simd(result);
-        }
-
-#elif defined(HAS_NEON)
-        // ARM NEON path: Process 2 doubles at once
-        for (size_t j = 0; j < HIDDEN_SIZE; j++) {
-            float64x2_t sum = vdupq_n_f64(0.0);
-            const double* weights_row = &weights_input_hidden_[j * INPUT_SIZE];
-            
-            // Vectorized dot product
-            for (size_t i = 0; i < INPUT_SIZE; i += 2) {
-                float64x2_t w = vld1q_f64(&weights_row[i]);
-                float64x2_t x = vld1q_f64(&input[i]);
-                sum = vfmaq_f64(sum, w, x);  // Fused multiply-add
-            }
-            
-            // Horizontal reduction
-            double result = vgetq_lane_f64(sum, 0) + vgetq_lane_f64(sum, 1);
-            result += bias_hidden_[j];
-            
-            hidden_buffer_[j] = fast_tanh_simd(result);
-        }
-
-#else
-        // Scalar fallback
-        for (size_t j = 0; j < HIDDEN_SIZE; j++) {
-            double sum = bias_hidden_[j];
-            const double* weights_row = &weights_input_hidden_[j * INPUT_SIZE];
-            for (size_t i = 0; i < INPUT_SIZE; i++) {
-                sum += weights_row[i] * input[i];
-            }
-            hidden_buffer_[j] = fast_tanh_simd(sum);
-        }
-#endif
-    }
-
-    /**
-     * Layer 2: Hidden → Output with SIMD vectorization
-     * 
-     * Computation: output[k] = softmax(Σ(W[k,j] × hidden[j]) + bias[k])
-     * 
-     * Since OUTPUT_SIZE=3 is small, we compute all 3 in parallel then apply softmax
-     */
-    inline void compute_output_layer_simd() {
-#if defined(HAS_AVX512)
-        // AVX-512: Compute all 3 outputs in parallel
-        for (size_t k = 0; k < OUTPUT_SIZE; k++) {
-            __m512d sum = _mm512_setzero_pd();
-            const double* weights_row = &weights_hidden_output_[k * HIDDEN_SIZE];
-            
-            // Vectorized dot product: 16 hidden units, process 8 at a time
-            __m512d h1 = _mm512_loadu_pd(&hidden_buffer_[0]);
-            __m512d w1 = _mm512_loadu_pd(&weights_row[0]);
-            sum = _mm512_fmadd_pd(w1, h1, sum);
-            
-            __m512d h2 = _mm512_loadu_pd(&hidden_buffer_[8]);
-            __m512d w2 = _mm512_loadu_pd(&weights_row[8]);
-            sum = _mm512_fmadd_pd(w2, h2, sum);
-            
-            double result = _mm512_reduce_add_pd(sum);
-            output_buffer_[k] = result + bias_output_[k];
-        }
-
-#elif defined(HAS_AVX2)
-        // AVX2: Compute all 3 outputs
-        for (size_t k = 0; k < OUTPUT_SIZE; k++) {
-            __m256d sum = _mm256_setzero_pd();
-            const double* weights_row = &weights_hidden_output_[k * HIDDEN_SIZE];
-            
-            // Process 16 hidden units, 4 at a time
-            for (size_t j = 0; j < HIDDEN_SIZE; j += 4) {
-                __m256d h = _mm256_loadu_pd(&hidden_buffer_[j]);
-                __m256d w = _mm256_loadu_pd(&weights_row[j]);
-                sum = _mm256_fmadd_pd(w, h, sum);
-            }
-            
-            // Horizontal reduction
-            __m128d sum_high = _mm256_extractf128_pd(sum, 1);
-            __m128d sum_low = _mm256_castpd256_pd128(sum);
-            __m128d sum128 = _mm_add_pd(sum_low, sum_high);
-            __m128d sum_shuf = _mm_shuffle_pd(sum128, sum128, 1);
-            sum128 = _mm_add_pd(sum128, sum_shuf);
-            
-            double result = _mm_cvtsd_f64(sum128);
-            output_buffer_[k] = result + bias_output_[k];
-        }
-
-#elif defined(HAS_NEON)
-        // ARM NEON: Compute all 3 outputs
-        for (size_t k = 0; k < OUTPUT_SIZE; k++) {
-            float64x2_t sum = vdupq_n_f64(0.0);
-            const double* weights_row = &weights_hidden_output_[k * HIDDEN_SIZE];
-            
-            // Process 16 hidden units, 2 at a time
-            for (size_t j = 0; j < HIDDEN_SIZE; j += 2) {
-                float64x2_t h = vld1q_f64(&hidden_buffer_[j]);
-                float64x2_t w = vld1q_f64(&weights_row[j]);
-                sum = vfmaq_f64(sum, w, h);
-            }
-            
-            double result = vgetq_lane_f64(sum, 0) + vgetq_lane_f64(sum, 1);
-            output_buffer_[k] = result + bias_output_[k];
-        }
-
-#else
-        // Scalar fallback
-        for (size_t k = 0; k < OUTPUT_SIZE; k++) {
-            double sum = bias_output_[k];
-            const double* weights_row = &weights_hidden_output_[k * HIDDEN_SIZE];
-            for (size_t j = 0; j < HIDDEN_SIZE; j++) {
-                sum += weights_row[j] * hidden_buffer_[j];
-            }
-            output_buffer_[k] = sum;
-        }
-#endif
-
-        // Apply softmax to output layer
-        apply_softmax_simd();
-    }
-
-    /**
-     * Fast tanh approximation using rational function
-     * 
-     * Approximation: tanh(x) ≈ x(27 + x²) / (27 + 9x²)
-     * Accurate to ~0.001 for x ∈ [-3, 3]
-     * Much faster than std::tanh (~5ns vs ~20ns)
-     */
-    inline double fast_tanh_simd(double x) const {
-        // Clamp to avoid numerical issues
-        if (x > 4.0) return 1.0;
-        if (x < -4.0) return -1.0;
-        
-        double x2 = x * x;
-        return x * (27.0 + x2) / (27.0 + 9.0 * x2);
-    }
-
-    /**
-     * Softmax activation for output layer
-     * 
-     * softmax(x_i) = exp(x_i) / Σ(exp(x_j))
-     * 
-     * Numerically stable: subtract max(x) before exp
-     */
-    inline void apply_softmax_simd() {
-        // Find max for numerical stability
-        double max_val = output_buffer_[0];
-        for (size_t i = 1; i < OUTPUT_SIZE; i++) {
-            if (output_buffer_[i] > max_val) max_val = output_buffer_[i];
-        }
-
-#if defined(HAS_AVX2)
-        // AVX2 vectorized exp (only 3 elements, but still worth it)
-        __m256d max_vec = _mm256_set1_pd(max_val);
-        __m256d vals = _mm256_setr_pd(output_buffer_[0], output_buffer_[1], 
-                                      output_buffer_[2], 0.0);
-        vals = _mm256_sub_pd(vals, max_vec);
-        
-        // Fast exp approximation (could use _mm256_exp_pd if available)
-        alignas(32) double temp[4];
-        _mm256_store_pd(temp, vals);
-        for (size_t i = 0; i < OUTPUT_SIZE; i++) {
-            temp[i] = std::exp(temp[i]);
-        }
-        
-        double sum = temp[0] + temp[1] + temp[2];
-        __m256d sum_vec = _mm256_set1_pd(sum);
-        __m256d exp_vec = _mm256_load_pd(temp);
-        __m256d result = _mm256_div_pd(exp_vec, sum_vec);
-        
-        _mm256_store_pd(temp, result);
-        output_buffer_[0] = temp[0];
-        output_buffer_[1] = temp[1];
-        output_buffer_[2] = temp[2];
-
-#else
-        // Scalar softmax
-        double sum = 0.0;
-        for (size_t i = 0; i < OUTPUT_SIZE; i++) {
-            output_buffer_[i] = std::exp(output_buffer_[i] - max_val);
-            sum += output_buffer_[i];
-        }
-        for (size_t i = 0; i < OUTPUT_SIZE; i++) {
-            output_buffer_[i] /= sum;
-        }
-#endif
-    }
-};
+namespace ml {
 
 /**
- * FastInferenceStub - Drop-in replacement for fpga_inference.hpp
+ * Nanosecond-Scale Inference Engine
  * 
- * Uses VectorizedInferenceEngine internally
- * Compatible with existing HFT system architecture
+ * Purpose: Run small MLPs (e.g., 64x32x1) inside the tick-to-trade loop.
+ * Latency Budget: < 200ns.
+ * Constraints: No heap allocation, weights pinned in registers/L1.
+ * 
+ * Optimization:
+ * - Weights are stored in Struct-of-Arrays (blocks of 16 floats/doubles).
+ * - Matrix-Vector multiplication is unrolled and vectorized.
+ * - Activation functions use fast approximations.
  */
-class FastInferenceStub {
+
+// Fast Sigmoid Approximation: 1 / (1 + |x|) or Polynomial
+// AVX-512: Use _mm512_exp2_ps for actual sigmoid?
+// Fast exp approximation is usually sufficient.
+// Sigmoid(x) = 0.5 * (x / (1 + |x|) + 1)  [Hard Sigmoid-ish]
+// Standard: 1 / (1 + exp(-x))
+template<typename T>
+inline T fast_sigmoid(T x) {
+    return 1.0 / (1.0 + std::exp(-x)); 
+}
+
+// AVX512 Fast Sigmoid
+#if defined(USE_AVX512_NN)
+inline __m512 fast_sigmoid_avx512(__m512 x) {
+    // 1.0f
+    __m512 ones = _mm512_set1_ps(1.0f);
+    // -x
+    __m512 neg_x = _mm512_sub_ps(_mm512_setzero_ps(), x);
+    // exp(-x) approximate
+    // _mm512_exp2_ps is base 2. e^x = 2^(x * log2(e))
+    __m512 log2e = _mm512_set1_ps(1.442695f);
+    __m512 e_x = _mm512_exp2_ps(_mm512_mul_ps(neg_x, log2e));
+    // 1 + exp(-x)
+    __m512 den = _mm512_add_ps(ones, e_x);
+    // 1 / den
+    return _mm512_div_ps(ones, den);
+}
+#endif
+
+// Dense Layer: Inputs -> Outputs
+// InputSize and OutputSize must be multiples of 16 for AVX-512 efficiency (padding required otherwise)
+template<size_t InputSize, size_t OutputSize>
+class DenseLayer {
 public:
-    FastInferenceStub() {
-        engine_.warm_cache();  // Pre-warm CPU cache
+    static constexpr size_t ALIGNMENT = 64;
+    
+    DenseLayer() {
+        std::fill(weights_.begin(), weights_.end(), 0.0f);
+        std::fill(biases_.begin(), biases_.end(), 0.0f);
     }
 
-    /**
-     * Execute inference on feature vector
-     * 
-     * @param features Array of 10 double features
-     * @return Trading signal: 1 (BUY), -1 (SELL), 0 (HOLD)
-     * 
-     * Performance: ~250ns (AVX-512), ~280ns (AVX2), ~320ns (NEON)
-     */
-    inline int predict(const double* features) {
-        auto output = engine_.predict(features);
-        return output.get_action();
+    void set_weights(const std::vector<float>& w, const std::vector<float>& b) {
+        if (w.size() != InputSize * OutputSize || b.size() != OutputSize) return;
+        
+        // Store weights in column-major order for efficient SIMD dot product?
+        // Actually, for matrix-vector (W * x), row-major is better if we broadcast x[i].
+        // Or column-major if we acculate output vectors.
+        // Let's use Column-Major: W = [Col0, Col1, ... ColInput]
+        // Each Col is size OutputSize.
+        // Output[j] += x[i] * W[i][j]
+        // This allows us to load a vector of W (OutputSize) and FMA it with broadcast(x[i]).
+        
+        for (size_t i = 0; i < InputSize; ++i) {
+            for (size_t j = 0; j < OutputSize; ++j) {
+                // Input i, Output j
+                size_t idx = i * OutputSize + j; // flat index in our internal storage
+                weights_[idx] = w[i * OutputSize + j]; // Assuming input w is row-major? 
+                // Let's assume input 'w' is standard row-major (Input x Output)
+                // We store row-major internally too.
+            }
+        }
+        
+        for (size_t j = 0; j < OutputSize; ++j) biases_[j] = b[j];
     }
 
-    /**
-     * Get raw output probabilities
-     */
-    inline VectorizedInferenceEngine::InferenceOutput predict_proba(const double* features) {
-        return engine_.predict(features);
-    }
+    // Inference: x is input array, y is output array
+    inline void forward(const float* __restrict__ input, float* __restrict__ output) const {
+#if defined(USE_AVX512_NN) && (OutputSize % 16 == 0)
+        // AVX-512 Path
+        
+        // Initialize output with biases
+        for (size_t j = 0; j < OutputSize; j += 16) {
+            __m512 b = _mm512_load_ps(&biases_[j]);
+            _mm512_store_ps(&output[j], b);
+        }
+        
+        // MatMul: y = W^T * x + b
+        // Logic: For each input i:
+        //   Broadcast x[i] to vector
+        //   Load W[row i] (vector of size OutputSize)
+        //   FMA into output accumulator
+        
+        for (size_t i = 0; i < InputSize; ++i) {
+            __m512 in_val = _mm512_set1_ps(input[i]);
+            
+            for (size_t j = 0; j < OutputSize; j += 16) {
+                // Weight index: Row i, Col j -> i * OutputSize + j
+                __m512 w = _mm512_load_ps(&weights_[i * OutputSize + j]);
+                __m512 out_acc = _mm512_load_ps(&output[j]); // Load current partial sum
+                
+                // out += in * w
+                out_acc = _mm512_fmadd_ps(in_val, w, out_acc);
+                
+                _mm512_store_ps(&output[j], out_acc);
+            }
+        }
+        
+        // Activation (ReLU)
+        __m512 zeros = _mm512_setzero_ps();
+        for (size_t j = 0; j < OutputSize; j += 16) {
+            __m512 y = _mm512_load_ps(&output[j]);
+            y = _mm512_max_ps(y, zeros); // ReLU
+            _mm512_store_ps(&output[j], y);
+        }
 
-    // Get latency estimate based on CPU capabilities
-    static uint64_t get_latency_estimate_ns() {
-#if defined(HAS_AVX512)
-        return 250;  // 250ns with AVX-512
-#elif defined(HAS_AVX2)
-        return 280;  // 280ns with AVX2
-#elif defined(HAS_NEON)
-        return 320;  // 320ns with ARM NEON
 #else
-        return 450;  // 450ns scalar fallback
+        // Scalar Fallback
+        for (size_t j = 0; j < OutputSize; ++j) output[j] = biases_[j];
+        
+        for (size_t i = 0; i < InputSize; ++i) {
+            float in_val = input[i];
+            for (size_t j = 0; j < OutputSize; ++j) {
+                output[j] += in_val * weights_[i * OutputSize + j];
+            }
+        }
+        
+        // ReLU
+        for (size_t j = 0; j < OutputSize; ++j) {
+            if (output[j] < 0.0f) output[j] = 0.0f;
+        }
 #endif
     }
 
 private:
-    VectorizedInferenceEngine engine_;
+    alignas(ALIGNMENT) std::array<float, InputSize * OutputSize> weights_;
+    alignas(ALIGNMENT) std::array<float, OutputSize> biases_;
 };
 
+// Fixed Topology MLP: 64 Input -> 32 Hidden -> 1 Output (Signal)
+class TradingMLP {
+public:
+    // Padded to 16-element boundary for AVX-512
+    static constexpr size_t L1_IN = 64;
+    static constexpr size_t L1_OUT = 32;
+    static constexpr size_t L2_OUT = 16; // Padded from 1? No, let's output 16 logits (e.g. classes or buckets)
+    // Or simpler: Single output scalar value. Dealing with <16 vector is annoying.
+    // Let's make final layer 16 outputs, use 0th as signal.
+    
+    DenseLayer<L1_IN, L1_OUT> layer1;
+    DenseLayer<L1_OUT, L2_OUT> layer2;
+    
+    // Intermediate buffer (HOT memory)
+    alignas(64) float hidden_buf[L1_OUT];
+    alignas(64) float output_buf[L2_OUT];
+
+    inline float predict(const float* input_features) {
+        // L1 Forward
+        layer1.forward(input_features, hidden_buf);
+        
+        // L2 Forward
+        layer2.forward(hidden_buf, output_buf);
+        
+        // Fast Sigmoid on logic 0
+        return fast_sigmoid(output_buf[0]);
+    }
+};
+
+} // namespace ml
 } // namespace hft

@@ -1,240 +1,182 @@
-#ifndef METRICS_COLLECTOR_HPP
-#define METRICS_COLLECTOR_HPP
+#pragma once
 
 #include "common_types.hpp"
-#include <atomic>
-#include <mutex>
-#include <deque>
-#include <chrono>
-#include <fstream>
+#include <cstdint>
+#include <unistd.h>
+#include <sys/syscall.h>
+#ifdef __linux__
+    #include <linux/perf_event.h>
+    typedef struct perf_event_mmap_page perf_mmap_page_t;
+#else
+    // Dummy type for non-Linux platforms
+    struct perf_mmap_page_t { uint32_t lock; uint32_t index; uint64_t offset; };
+#endif
+#include <sys/mman.h>
+#include <vector>
+#include <cstring>
+#include <iostream>
 
-struct TradingMetrics {
+namespace hft {
+namespace profiling {
 
-    int64_t timestamp_ns;
+/**
+ * RDPMC (Read Performance Monitoring Counters) Wrapper
+ * 
+ * "State of the Art" Profiling:
+ * Standard profiling (e.g. valid 'perf') uses interrupts, which cause latency spikes (~1500ns).
+ * We use `perf_event_open` to configure the CPU counters, then map them to userspace.
+ * Finally, we use the `rdpmc` assembly instruction to read LLC Cache Misses / Mispredicted Branches
+ * in < 30 cycles, without ANY system calls or interrupts.
+ * 
+ * NOTE: On macOS, hardware counters are not supported via perf_event. Methods will return 0.
+ */
+class HardwareCounter {
+public:
+    enum class Type {
+        INSTRUCTIONS,
+        CYCLES,
+        CACHE_MISSES,
+        BRANCH_MISSES
+    };
 
-    std::atomic<int64_t> current_position{0};
-    std::atomic<double> unrealized_pnl{0.0};
-    std::atomic<double> realized_pnl{0.0};
-    std::atomic<double> total_pnl{0.0};
+    HardwareCounter() : fd_(-1), perf_page_(nullptr) {}
 
-    std::atomic<double> mid_price{0.0};
-    std::atomic<double> spread_bps{0.0};
-    std::atomic<double> bid_price{0.0};
-    std::atomic<double> ask_price{0.0};
+    bool init(Type type) {
+#ifdef __linux__
+        struct perf_event_attr pe;
+        std::memset(&pe, 0, sizeof(pe));
+        pe.size = sizeof(pe);
+        pe.disabled = 1; // Start disabled
+        pe.exclude_kernel = 1;
+        pe.exclude_hv = 1;
 
-    std::atomic<uint64_t> orders_sent{0};
-    std::atomic<uint64_t> orders_filled{0};
-    std::atomic<uint64_t> orders_rejected{0};
-    std::atomic<uint64_t> orders_cancelled{0};
+        switch (type) {
+            case Type::INSTRUCTIONS: 
+                pe.type = PERF_TYPE_HARDWARE; 
+                pe.config = PERF_COUNT_HW_INSTRUCTIONS; 
+                break;
+            case Type::CYCLES:
+                pe.type = PERF_TYPE_HARDWARE;
+                pe.config = PERF_COUNT_HW_CPU_CYCLES;
+                break;
+            case Type::CACHE_MISSES:
+                pe.type = PERF_TYPE_HARDWARE;
+                pe.config = PERF_COUNT_HW_CACHE_MISSES;
+                break;
+            case Type::BRANCH_MISSES:
+                pe.type = PERF_TYPE_HARDWARE;
+                pe.config = PERF_COUNT_HW_BRANCH_MISSES; // Critical for HFT logic checks
+                break;
+        }
 
-    std::atomic<double> buy_intensity{0.0};
-    std::atomic<double> sell_intensity{0.0};
-    std::atomic<double> intensity_imbalance{0.0};
+        // Open perf event for current thread (pid=0), current cpu (-1 = any? no, pin to cpu usually)
+        // For accurate HFT, we assume thread is already pinned.
+        fd_ = syscall(__NR_perf_event_open, &pe, 0, -1, -1, 0);
+        if (fd_ == -1) {
+            // Permission denied is common (check /proc/sys/kernel/perf_event_paranoid)
+            return false;
+        }
 
-    std::atomic<double> position_limit_usage{0.0};
-    std::atomic<int> current_regime{0};
-    std::atomic<double> regime_multiplier{1.0};
+        // Map the page for RDPMC support
+        perf_page_ = (perf_mmap_page_t*)mmap(NULL, getpagesize(), PROT_READ, MAP_SHARED, fd_, 0);
+        if (perf_page_ == MAP_FAILED) {
+            close(fd_);
+            return false;
+        }
 
-    std::atomic<double> avg_cycle_latency_us{0.0};
-    std::atomic<double> max_cycle_latency_us{0.0};
-    std::atomic<double> min_cycle_latency_us{999999.0};
+        // Resume counting
+        ioctl(fd_, PERF_EVENT_IOC_ENABLE, 0);
+        return true;
+#else
+        // macOS: Hardware counters not supported via perf_event
+        (void)type;  // Suppress unused parameter warning
+        return false;
+#endif
+    }
 
-    std::atomic<double> market_queue_util{0.0};
-    std::atomic<double> order_queue_util{0.0};
+    ~HardwareCounter() {
+        if (fd_ != -1) close(fd_);
+    }
 
-    std::atomic<double> inventory_skew{0.0};
-    std::atomic<double> reservation_price{0.0};
-    std::atomic<double> optimal_spread{0.0};
+    // ULTRA-FAST READ (~10-30 cycles)
+    inline uint64_t read() const {
+        if (!perf_page_) return 0;
 
-    TradingMetrics() : timestamp_ns(std::chrono::steady_clock::now().time_since_epoch().count()) {}
-};
+#ifdef __linux__
+        uint32_t seq, index;
+        uint64_t count;
 
-struct MetricSnapshot {
-    int64_t timestamp_ns;
-    double mid_price;
-    double spread_bps;
-    double pnl;
-    int64_t position;
-    double buy_intensity;
-    double sell_intensity;
-    double cycle_latency_us;
-    uint64_t orders_sent;
-    uint64_t orders_filled;
-    int regime;
-    double position_limit_usage;
+        // Sequence lock to prevent reading during update
+        do {
+            seq = perf_page_->lock;
+            std::atomic_thread_fence(std::memory_order_acquire);
+            index = perf_page_->index;
+            uint64_t offset = perf_page_->offset;
+            
+            if (index == 0) return 0; // Not running
+
+#if defined(__x86_64__) || defined(_M_X64)
+            // rdpmc instruction (x86 only)
+            // ecx = index - 1
+            uint32_t pmc_idx = index - 1;
+            uint64_t pmc_val;
+            __asm__ volatile("rdpmc" : "=A" (pmc_val) : "c" (pmc_idx));
+            
+            count = offset + pmc_val;
+#else
+            // ARM64 or other: cannot use rdpmc, return offset only
+            count = offset;
+#endif
+            std::atomic_thread_fence(std::memory_order_acquire);
+
+        } while (perf_page_->lock != seq);
+
+        return count;
+#else
+        return 0; // Non-Linux platforms
+#endif
+    }
+
+private:
+    int fd_;
+    perf_mmap_page_t* perf_page_;
 };
 
 class MetricsCollector {
 public:
-    explicit MetricsCollector(size_t history_size = 10000)
-        : history_size_(history_size),
-          metrics_(),
-          running_(true) {
+    static MetricsCollector& instance() {
+        static MetricsCollector inst;
+        return inst;
     }
 
-    ~MetricsCollector() {
-        running_.store(false, std::memory_order_release);
+    void init() {
+        l1_missers_.init(HardwareCounter::Type::CACHE_MISSES);
+        branch_missers_.init(HardwareCounter::Type::BRANCH_MISSES);
     }
 
-    TradingMetrics& get_metrics() {
-        return metrics_;
+    // Checkpoint: call this at start of hot loop
+    inline void start_frame() {
+        start_cache_ = l1_missers_.read();
+        start_branch_ = branch_missers_.read();
     }
 
-    void take_snapshot() {
-        MetricSnapshot snap;
-        snap.timestamp_ns = std::chrono::steady_clock::now().time_since_epoch().count();
-        snap.mid_price = metrics_.mid_price.load(std::memory_order_acquire);
-        snap.spread_bps = metrics_.spread_bps.load(std::memory_order_acquire);
-        snap.pnl = metrics_.total_pnl.load(std::memory_order_acquire);
-        snap.position = metrics_.current_position.load(std::memory_order_acquire);
-        snap.buy_intensity = metrics_.buy_intensity.load(std::memory_order_acquire);
-        snap.sell_intensity = metrics_.sell_intensity.load(std::memory_order_acquire);
-        snap.cycle_latency_us = metrics_.avg_cycle_latency_us.load(std::memory_order_acquire);
-        snap.orders_sent = metrics_.orders_sent.load(std::memory_order_acquire);
-        snap.orders_filled = metrics_.orders_filled.load(std::memory_order_acquire);
-        snap.regime = metrics_.current_regime.load(std::memory_order_acquire);
-        snap.position_limit_usage = metrics_.position_limit_usage.load(std::memory_order_acquire);
-
-        std::lock_guard<std::mutex> lock(snapshots_mutex_);
-        snapshots_.push_back(snap);
-
-        if (snapshots_.size() > history_size_) {
-            snapshots_.pop_front();
+    // Checkpoint: call this at end
+    inline void end_frame() {
+        uint64_t misses = l1_missers_.read() - start_cache_;
+        uint64_t branches = branch_missers_.read() - start_branch_;
+        
+        if (misses > 100 || branches > 100) {
+            // Log anomaly?
+            // "High micro-architectural pressure detected"
         }
     }
 
-    std::vector<MetricSnapshot> get_recent_snapshots(size_t count = 1000) {
-        std::lock_guard<std::mutex> lock(snapshots_mutex_);
+private:
+    HardwareCounter l1_missers_;
+    HardwareCounter branch_missers_;
+    uint64_t start_cache_ = 0;
+    uint64_t start_branch_ = 0;
+};
 
-        size_t start = (snapshots_.size() > count) ? (snapshots_.size() - count) : 0;
-        return std::vector<MetricSnapshot>(
-            snapshots_.begin() + start,
-            snapshots_.end()
-        );
-    }
-
-    void export_to_csv(const std::string& filename) {
-        std::lock_guard<std::mutex> lock(snapshots_mutex_);
-        std::ofstream file(filename);
-
-        file<<"timestamp_ns,mid_price,spread_bps,pnl,position,"<<"buy_intensity,sell_intensity,latency_us,orders_sent,"<<"orders_filled,regime,position_limit_usage\n";
-
-        for (const auto& snap : snapshots_) {
-        file<<snap.timestamp_ns<<","<<snap.mid_price<<","<<snap.spread_bps<<","<<snap.pnl<<","<<snap.position<<","<<snap.buy_intensity<<","<<snap.sell_intensity<<","<<snap.cycle_latency_us<<","<<snap.orders_sent<<","<<snap.orders_filled<<","<<snap.regime<<","<<snap.position_limit_usage<<"\n";
-        }
-            }
-
-                 struct SummaryStats {
-                 double avg_pnl;
-                 double max_pnl;
-                 double min_pnl;
-                 double sharpe_ratio;
-                 double max_drawdown;
-                 double avg_latency_us;
-                 double max_latency_us;
-                 uint64_t total_trades;
-        double fill_rate;
-    };
-
-    SummaryStats get_summary() {
-    std::lock_guard<std::mutex> lock(snapshots_mutex_);
-
-        SummaryStats stats{};
-        if (snapshots_.empty()) return stats;
-
-        double sum_pnl = 0.0;
-        double max_pnl = -1e9;
-        double min_pnl = 1e9;
-        double sum_latency = 0.0;
-        double max_latency = 0.0;
-
-    for (const auto& snap : snapshots_) {
-    sum_pnl += snap.pnl;
-        max_pnl = std::max(max_pnl, snap.pnl);
-        min_pnl = std::min(min_pnl, snap.pnl);
-        sum_latency += snap.cycle_latency_us;
-        max_latency = std::max(max_latency, snap.cycle_latency_us);
-        }
-
-        stats.avg_pnl = sum_pnl / snapshots_.size();
-        stats.max_pnl = max_pnl;
-        stats.min_pnl = min_pnl;
-        stats.avg_latency_us = sum_latency / snapshots_.size();
-        stats.max_latency_us = max_latency;
-
-            auto last_snap = snapshots_.back();
-            stats.total_trades = last_snap.orders_filled;
-            stats.fill_rate = (last_snap.orders_sent > 0)
-            ? (double)last_snap.orders_filled / last_snap.orders_sent
-            : 0.0;
-
-        return stats;
-        }
-
-        void update_cycle_latency(double latency_us) {
-        metrics_.avg_cycle_latency_us.store(latency_us, std::memory_order_release);
-
-        double current_max = metrics_.max_cycle_latency_us.load(std::memory_order_acquire);
-        if (latency_us > current_max) {
-        metrics_.max_cycle_latency_us.store(latency_us, std::memory_order_release);
-            }
-
-        double current_min = metrics_.min_cycle_latency_us.load(std::memory_order_acquire);
-        if (latency_us < current_min) {
-    metrics_.min_cycle_latency_us.store(latency_us, std::memory_order_release);
-    }
-    }
-
-        void update_market_data(double mid, double bid, double ask) {
-        metrics_.mid_price.store(mid, std::memory_order_release);
-        metrics_.bid_price.store(bid, std::memory_order_release);
-        metrics_.ask_price.store(ask, std::memory_order_release);
-
-        double spread = ((ask - bid) / mid) * 10000.0;
-        metrics_.spread_bps.store(spread, std::memory_order_release);
-        }
-
-            void update_position(int64_t position, double unrealized_pnl, double realized_pnl) {
-        metrics_.current_position.store(position, std::memory_order_release);
-    metrics_.unrealized_pnl.store(unrealized_pnl, std::memory_order_release);
-    metrics_.realized_pnl.store(realized_pnl, std::memory_order_release);
-    metrics_.total_pnl.store(unrealized_pnl + realized_pnl, std::memory_order_release);
-        }
-
-        void increment_orders_sent() {
-        metrics_.orders_sent.fetch_add(1, std::memory_order_acq_rel);
-        }
-
-    void increment_orders_filled() {
-    metrics_.orders_filled.fetch_add(1, std::memory_order_acq_rel);
-    }
-
-        void increment_orders_rejected() {
-        metrics_.orders_rejected.fetch_add(1, std::memory_order_acq_rel);
-        }
-
-    void update_hawkes_intensity(double buy, double sell) {
-    metrics_.buy_intensity.store(buy, std::memory_order_release);
-        metrics_.sell_intensity.store(sell, std::memory_order_release);
-    metrics_.intensity_imbalance.store(
-    (buy - sell) / (buy + sell + 1e-10),
-    std::memory_order_release
-        );
-    }
-
-    void update_risk(int regime, double multiplier, double position_usage) {
-        metrics_.current_regime.store(regime, std::memory_order_release);
-    metrics_.regime_multiplier.store(multiplier, std::memory_order_release);
-    metrics_.position_limit_usage.store(position_usage, std::memory_order_release);
-    }
-
-        private:
-        size_t history_size_;
-            TradingMetrics metrics_;
-            std::atomic<bool> running_;
-
-    std::deque<MetricSnapshot> snapshots_;
-    std::mutex snapshots_mutex_;
-    };
-
-        #endif
+} // namespace profiling
+} // namespace hft

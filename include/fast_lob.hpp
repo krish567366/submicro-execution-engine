@@ -3,423 +3,491 @@
 #include "common_types.hpp"
 #include <array>
 #include <vector>
-#include <unordered_map>
 #include <cstring>
 #include <algorithm>
+#include <limits>
+#include <cmath>
 
-// prefetch macros - speeds up about 15ns on our test box
+#if defined(__x86_64__) || defined(_M_X64)
+#include <immintrin.h>
+#endif
+
+// Branch prediction & Prefetch
 #if defined(__GNUC__) || defined(__clang__)
-    #define PREFETCH(addr) __builtin_prefetch((addr), 0, 3)
+    #define PREFETCH_READ(addr) __builtin_prefetch((addr), 0, 3)
+    #define PREFETCH_WRITE(addr) __builtin_prefetch((addr), 1, 3)
     #define LIKELY(x) __builtin_expect(!!(x), 1)
     #define UNLIKELY(x) __builtin_expect(!!(x), 0)
 #else
-    #define PREFETCH(addr)
+    #define PREFETCH_READ(addr)
+    #define PREFETCH_WRITE(addr)
     #define LIKELY(x) (x)
     #define UNLIKELY(x) (x)
 #endif
 
 namespace hft {
 
-// level storage - 64 byte aligned for cache line
-struct alignas(64) PriceLevel {
-    double px;
-    double qty;
-    uint32_t cnt;
-    bool active;
-    char _pad[39];  // pad to 64 bytes
-    
-    PriceLevel() : px(0), qty(0), cnt(0), active(false) {}
-};
-
-// Array-based order book (fixed capacity, O(1) access)
-template<size_t MaxLevels = 100>
-class ArrayBasedOrderBook {
+// ==========================================
+// 1. High-Performance Fixed-Size Flat Map
+// ==========================================
+// Linear probing open addressing. No allocations.
+template<typename Key, typename Value, size_t Capacity, Key EmptyKey = 0>
+class FlatMap {
 public:
-    ArrayBasedOrderBook() : num_bid_levels_(0), num_ask_levels_(0) {
-        bids_.fill(FastPriceLevel());
-        asks_.fill(FastPriceLevel());
-        
-        // Pre-reserve hash map capacity to avoid rehashing during runtime
-        bid_price_to_index_.reserve(MaxLevels);
-        ask_price_to_index_.reserve(MaxLevels);
+    struct Entry {
+        Key key;
+        Value value;
+    };
+
+    FlatMap() { clear(); }
+
+    void clear() {
+        for (auto& e : entries_) e.key = EmptyKey;
+        size_ = 0;
     }
-    
-    // Add/update price level (O(1) average via hash map)
-    inline void update_bid(double price, double quantity, uint32_t order_count) {
-        // Prefetch hash map bucket for faster lookup
-        PREFETCH_READ(&bid_price_to_index_);
-        
-        auto it = bid_price_to_index_.find(price);
-        
-        if (LIKELY(it != bid_price_to_index_.end())) {
-            // HOT PATH: Update existing level (most common case)
-            size_t idx = it->second;
-            
-            // Prefetch the target array element
-            PREFETCH_WRITE(&bids_[idx]);
-            
-            bids_[idx].quantity = quantity;
-            bids_[idx].order_count = order_count;
-            bids_[idx].is_active = (quantity > 0.0);
-            
-            if (UNLIKELY(quantity <= 0.0)) {
-                // COLD PATH: Remove from hash map
-                bid_price_to_index_.erase(it);
+
+    // Insert or update. Returns pointer to value.
+    Value* insert_or_assign(Key key, const Value& value) {
+        size_t idx = hash(key);
+        size_t start_idx = idx;
+
+        while (true) {
+            if (entries_[idx].key == EmptyKey) {
+                // New entry
+                entries_[idx].key = key;
+                entries_[idx].value = value;
+                size_++;
+                return &entries_[idx].value;
             }
-        } else if (UNLIKELY(quantity > 0.0)) {
-            // COLD PATH: Add new level
-            size_t idx = allocate_bid_slot();
-            
-            // Prefetch the target array element
-            PREFETCH_WRITE(&bids_[idx]);
-            
-            bids_[idx].price = price;
-            bids_[idx].quantity = quantity;
-            bids_[idx].order_count = order_count;
-            bids_[idx].is_active = true;
-            bid_price_to_index_[price] = idx;
-        }
-    }
-    
-    inline void update_ask(double price, double quantity, uint32_t order_count) {
-        // Prefetch hash map bucket for faster lookup
-        PREFETCH_READ(&ask_price_to_index_);
-        
-        auto it = ask_price_to_index_.find(price);
-        
-        if (LIKELY(it != ask_price_to_index_.end())) {
-            // HOT PATH: Update existing level
-            size_t idx = it->second;
-            
-            // Prefetch the target array element
-            PREFETCH_WRITE(&asks_[idx]);
-            
-            asks_[idx].quantity = quantity;
-            asks_[idx].order_count = order_count;
-            asks_[idx].is_active = (quantity > 0.0);
-            
-            if (UNLIKELY(quantity <= 0.0)) {
-                ask_price_to_index_.erase(it);
+            if (entries_[idx].key == key) {
+                // Update
+                entries_[idx].value = value;
+                return &entries_[idx].value;
             }
-        } else if (UNLIKELY(quantity > 0.0)) {
-            // COLD PATH: Add new level
-            size_t idx = allocate_ask_slot();
-            
-            // Prefetch the target array element
-            PREFETCH_WRITE(&asks_[idx]);
-            
-            asks_[idx].price = price;
-            asks_[idx].quantity = quantity;
-            asks_[idx].order_count = order_count;
-            asks_[idx].is_active = true;
-            ask_price_to_index_[price] = idx;
+            idx = (idx + 1) % Capacity;
+            if (UNLIKELY(idx == start_idx)) return nullptr; // Full
         }
     }
+
+    Value* find(Key key) {
+        size_t idx = hash(key);
+        size_t start_idx = idx;
+
+        while (entries_[idx].key != EmptyKey) {
+            if (entries_[idx].key == key) return &entries_[idx].value;
+            idx = (idx + 1) % Capacity;
+            if (UNLIKELY(idx == start_idx)) return nullptr;
+        }
+        return nullptr;
+    }
     
-    // Get top N levels (O(N) - iterate active levels)
-    inline void get_top_bids(size_t n, std::vector<FastPriceLevel>& output) const {
-        output.clear();
-        
-        // Collect active bids
-        for (size_t i = 0; i < MaxLevels; ++i) {
-            if (bids_[i].is_active) {
-                output.push_back(bids_[i]);
+    // Lazy deletion with tombstone would be better for heavy churn, 
+    // but for order book pure deletion is rare compared to modification.
+    // We strictly use EmptyKey for empty. If we shift on delete it's O(cluster).
+    // For simplicity & speed in HFT, we often just mark as inactive or use a tombstome 
+    // if key collision is high. Here we use simple linear probe with backshift removal 
+    // to keep chains contiguous.
+    bool erase(Key key) {
+        size_t idx = hash(key);
+        size_t start_idx = idx;
+
+        while (entries_[idx].key != EmptyKey) {
+            if (entries_[idx].key == key) {
+                // Found, remove it
+                entries_[idx].key = EmptyKey;
+                size_--;
+                
+                // Rehash chain
+                size_t hole = idx;
+                size_t next = (hole + 1) % Capacity;
+                
+                while (entries_[next].key != EmptyKey) {
+                    size_t desired = hash(entries_[next].key);
+                    // Determine if 'next' belongs in the gap between 'desired' and 'hole'
+                    // Cyclical logic: (hole < desired <= next) or (next < hole < desired) or (desired <= next < hole)
+                    // If true, it stays. If false, it moves to hole.
+                    bool belongs_in_gap = (hole < desired && desired <= next) ||
+                                          (next < hole && hole < desired) ||
+                                          (desired <= next && next < hole); // Simplified check logic often tricky
+                    
+                    // Actually simpler: if hash(next) is NOT "cyclically between" (hole+1) and next, we can move it?
+                    // Standard Python dict removal / Robin Hood logic:
+                    // Just swapping empty key? No, simpler to just swap with last event or use tombstone?
+                    // Speedhack: Just mark key as EmptyKey? No, breaks probe chain.
+                    // Correct backshift:
+                    if (!((hole <= next) ? (hole < desired && desired <= next) : (hole < desired || desired <= next))) {
+                         entries_[hole] = entries_[next];
+                         entries_[next].key = EmptyKey;
+                         hole = next;
+                    }
+                    next = (next + 1) % Capacity;
+                }
+                return true;
             }
+            idx = (idx + 1) % Capacity;
+            if (UNLIKELY(idx == start_idx)) return false;
         }
-        
-        // Sort descending by price
-        std::partial_sort(output.begin(), 
-                         output.begin() + std::min(n, output.size()),
-                         output.end(),
-                         [](const FastPriceLevel& a, const FastPriceLevel& b) {
-                             return a.price > b.price;
-                         });
-        
-        if (output.size() > n) {
-            output.resize(n);
-        }
+        return false;
     }
-    
-    inline void get_top_asks(size_t n, std::vector<FastPriceLevel>& output) const {
-        output.clear();
-        
-        // Collect active asks
-        for (size_t i = 0; i < MaxLevels; ++i) {
-            if (asks_[i].is_active) {
-                output.push_back(asks_[i]);
-            }
-        }
-        
-        // Sort ascending by price
-        std::partial_sort(output.begin(),
-                         output.begin() + std::min(n, output.size()),
-                         output.end(),
-                         [](const FastPriceLevel& a, const FastPriceLevel& b) {
-                             return a.price < b.price;
-                         });
-        
-        if (output.size() > n) {
-            output.resize(n);
-        }
-    }
-    
-    // Fast top-of-book access (O(1) if cached)
-    inline const FastPriceLevel* get_best_bid() const {
-        double best_price = -1e10;
-        const FastPriceLevel* best = nullptr;
-        
-        for (size_t i = 0; i < MaxLevels; ++i) {
-            if (bids_[i].is_active && bids_[i].price > best_price) {
-                best_price = bids_[i].price;
-                best = &bids_[i];
-            }
-        }
-        
-        return best;
-    }
-    
-    inline const FastPriceLevel* get_best_ask() const {
-        double best_price = 1e10;
-        const FastPriceLevel* best = nullptr;
-        
-        for (size_t i = 0; i < MaxLevels; ++i) {
-            if (asks_[i].is_active && asks_[i].price < best_price) {
-                best_price = asks_[i].price;
-                best = &asks_[i];
-            }
-        }
-        
-        return best;
-    }
-    
-    // Clear book
-    inline void clear() {
-        bids_.fill(FastPriceLevel());
-        asks_.fill(FastPriceLevel());
-        bid_price_to_index_.clear();
-        ask_price_to_index_.clear();
-        num_bid_levels_ = 0;
-        num_ask_levels_ = 0;
-    }
-    
+
 private:
-    std::array<FastPriceLevel, MaxLevels> bids_;
-    std::array<FastPriceLevel, MaxLevels> asks_;
-    
-    // Price -> array index (O(1) average lookup)
-    std::unordered_map<double, size_t> bid_price_to_index_;
-    std::unordered_map<double, size_t> ask_price_to_index_;
-    
-    size_t num_bid_levels_;
-    size_t num_ask_levels_;
-    
-    // Allocate next available slot (O(1) amortized)
-    inline size_t allocate_bid_slot() {
-        for (size_t i = 0; i < MaxLevels; ++i) {
-            if (!bids_[i].is_active) {
-                num_bid_levels_++;
-                return i;
-            }
-        }
-        // Fallback: overwrite oldest (should never happen with proper sizing)
-        return 0;
-    }
-    
-    inline size_t allocate_ask_slot() {
-        for (size_t i = 0; i < MaxLevels; ++i) {
-            if (!asks_[i].is_active) {
-                num_ask_levels_++;
-                return i;
-            }
-        }
-        return 0;
+    std::array<Entry, Capacity> entries_;
+    size_t size_;
+
+    // Fast integer mixer
+    inline size_t hash(Key k) const {
+        // Multiplicative fibonacci hashing
+        return (k * 11400714819323198485llu) & (Capacity - 1);
     }
 };
 
-// ====
-// Optimized Order Tracking (hash map instead of std::map)
-// ====
-struct FastTrackedOrder {
-    uint64_t order_id;
+struct FastPriceLevel {
     double price;
     double quantity;
-    bool is_bid;
-    
-    FastTrackedOrder() : order_id(0), price(0.0), quantity(0.0), is_bid(true) {}
+    uint32_t order_count;
+    bool is_active;
 };
 
-// ====
-// Fast LOB Reconstructor (drop-in replacement for OrderBookReconstructor)
-// Uses array-based storage instead of std::map
-// ====
+// ==========================================
+// 2. Optimized Order Book (SoA + AVX2)
+// ==========================================
+template<size_t MaxLevels>
+class ArrayBasedOrderBook {
+public:
+    // Level view struct for accessing individual levels
+    struct Level {
+        double price;
+        double quantity;
+        uint32_t count;
+    };
+    
+    // SoA Layout: Hardware prefetcher friendly, SIMD compatible
+    struct Side {
+        alignas(64) std::array<double, MaxLevels> prices;
+        alignas(64) std::array<double, MaxLevels> quantities;
+        alignas(64) std::array<uint32_t, MaxLevels> counts;
+        uint32_t count = 0;
+        
+        Side() {
+            // Init prices to guard values? 
+            // For Bids: -Inf (or 0). For Asks: +Inf.
+            // But we track 'count', so uninitialized is fine if careful.
+            // Zeroing is safer.
+            prices.fill(0.0);
+            quantities.fill(0.0);
+            counts.fill(0);
+        }
+    };
+
+    Side bids;
+    Side asks;
+
+    // SIMD Helper: Find index of first element where (Value OP Array[i])
+    // Returns index [0, Limit) or Limit if not found
+    template<bool IsBid>
+    inline int find_insertion_index(double price, const std::array<double, MaxLevels>& prices, int count) {
+        int i = 0;
+#if defined(__AVX2__)
+        __m256d v_price = _mm256_set1_pd(price);
+        
+        // Process 4 doubles at a time
+        // Loop unrolling for MaxLevels=20 (5 iters)
+        // Manual unroll or let compiler?
+        // With constant MaxLevels, compiler unrolls well.
+        for (; i <= count - 4; i += 4) {
+            __m256d v_levels = _mm256_load_pd(&prices[i]); // Aligned? std::array alignas(64) yes.
+            
+            // Mask: (NewPrice > LevelPrice) for Bids (Descending)
+            // Mask: (NewPrice < LevelPrice) for Asks (Ascending)
+            __m256d cmp;
+            if constexpr (IsBid) { // Descending arrays
+                cmp = _mm256_cmp_pd(v_price, v_levels, _CMP_GT_OQ); 
+            } else { // Ascending arrays
+                cmp = _mm256_cmp_pd(v_price, v_levels, _CMP_LT_OQ);
+            }
+            
+            int mask = _mm256_movemask_pd(cmp);
+            if (mask != 0) {
+                return i + __builtin_ctz(mask); // First set bit
+            }
+        }
+#endif
+        // Scalar tail
+        for (; i < count; ++i) {
+            if constexpr (IsBid) {
+                if (price > prices[i]) return i;
+            } else {
+                if (price < prices[i]) return i;
+            }
+        }
+        return count;
+    }
+
+    void update_bid(double price, double size, uint32_t count) {
+        // 1. Check for Update/Delete (Exact Match)
+        // AVX scan for equality?
+        // Let's stick to scalar linear for exact match since it's likely high up.
+        // Actually for N=20 scalar is fast.
+        
+        for(size_t i=0; i<bids.count; ++i) {
+            // Fast abs diff
+            if (std::abs(bids.prices[i] - price) < 1e-9) {
+                if (size <= 0) {
+                    // Remove: Shift all arrays left
+                    size_t rem = bids.count - 1 - i;
+                    if (rem > 0) {
+                        std::memmove(&bids.prices[i], &bids.prices[i+1], rem * sizeof(double));
+                        std::memmove(&bids.quantities[i], &bids.quantities[i+1], rem * sizeof(double));
+                        std::memmove(&bids.counts[i], &bids.counts[i+1], rem * sizeof(uint32_t));
+                    }
+                    bids.count--;
+                } else {
+                    bids.quantities[i] = size;
+                    bids.counts[i] = count;
+                }
+                return;
+            }
+        }
+        
+        // 2. Insert New
+        if (size > 0 && bids.count < MaxLevels) {
+            int idx = find_insertion_index<true>(price, bids.prices, bids.count);
+            
+            // Shift Right
+            size_t rem = bids.count - idx;
+            if (rem > 0) {
+                std::memmove(&bids.prices[idx+1], &bids.prices[idx], rem * sizeof(double));
+                std::memmove(&bids.quantities[idx+1], &bids.quantities[idx], rem * sizeof(double));
+                std::memmove(&bids.counts[idx+1], &bids.counts[idx], rem * sizeof(uint32_t));
+            }
+            
+            bids.prices[idx] = price;
+            bids.quantities[idx] = size;
+            bids.counts[idx] = count;
+            bids.count++;
+        }
+    }
+
+    void update_ask(double price, double size, uint32_t count) {
+        for(size_t i=0; i<asks.count; ++i) {
+            if (std::abs(asks.prices[i] - price) < 1e-9) {
+                if (size <= 0) {
+                    size_t rem = asks.count - 1 - i;
+                    if (rem > 0) {
+                        std::memmove(&asks.prices[i], &asks.prices[i+1], rem * sizeof(double));
+                        std::memmove(&asks.quantities[i], &asks.quantities[i+1], rem * sizeof(double));
+                        std::memmove(&asks.counts[i], &asks.counts[i+1], rem * sizeof(uint32_t));
+                    }
+                    asks.count--;
+                } else {
+                    asks.quantities[i] = size;
+                    asks.counts[i] = count;
+                }
+                return;
+            }
+        }
+        
+        if (size > 0 && asks.count < MaxLevels) {
+            int idx = find_insertion_index<false>(price, asks.prices, asks.count);
+            
+            size_t rem = asks.count - idx;
+            if (rem > 0) {
+                std::memmove(&asks.prices[idx+1], &asks.prices[idx], rem * sizeof(double));
+                std::memmove(&asks.quantities[idx+1], &asks.quantities[idx], rem * sizeof(double));
+                std::memmove(&asks.counts[idx+1], &asks.counts[idx], rem * sizeof(uint32_t));
+            }
+            
+            asks.prices[idx] = price;
+            asks.quantities[idx] = size;
+            asks.counts[idx] = count;
+            asks.count++;
+        }
+    }
+};
+
+// struct Level for external access via conversion or just exposing primitives
+// The FastLOBReconstructor accessors need to change their return type or construct a view
+
+
+// ==========================================
+// 3. Zero-Allocation Fast Reconstructor
+// ==========================================
+struct TrackedOrder {
+    uint64_t id;
+    double px;
+    double qty;
+    bool is_bid;
+};
+
+// Power of 2 capacity for fast modulo
+static constexpr size_t ORDER_MAP_CAPACITY = 32768; // 2^15
+static constexpr size_t PRICE_MAP_CAPACITY = 1024; // 2^10
+
 class FastLOBReconstructor {
 public:
-    FastLOBReconstructor(const std::string& symbol) 
-        : symbol_(symbol), last_sequence_number_(0) {}
-    
-    // Process update (~150ns instead of 250ns)
-    inline bool process_update(uint64_t sequence_number, uint8_t update_type,
-                              uint64_t order_id, double price, double quantity, 
-                              bool is_bid) {
+    FastLOBReconstructor(const std::string& symbol)
+        : last_seq_(0) {
+        // Symbol ignored in fast path struct
+    }
+
+    // Hot Path: 100% Allocation Free
+    inline bool process_update(uint64_t seq, uint8_t type, uint64_t oid, double px, double qty, bool bid) {
+        // PREFETCH_WRITE(&orders_); // Prefetch map buckets? Har to guess
         
-        // Sequence check (~5ns)
-        if (sequence_number != last_sequence_number_ + 1 && last_sequence_number_ != 0) {
-            return false;  // Gap detected
+        if (UNLIKELY(seq != last_seq_ + 1 && last_seq_ != 0)) return false;
+        last_seq_ = seq;
+
+        switch(type) {
+            case 0: return on_add(oid, px, qty, bid);
+            case 1: return on_mod(oid, px, qty, bid);
+            case 2: return on_del(oid);
+            case 3: return on_exec(oid, qty);
         }
-        last_sequence_number_ = sequence_number;
-        
-        // Process based on type (~140ns total)
-        switch (update_type) {
-            case 0:  // ADD
-                return handle_add(order_id, price, quantity, is_bid);
-            case 1:  // MODIFY
-                return handle_modify(order_id, price, quantity, is_bid);
-            case 2:  // DELETE
-                return handle_delete(order_id);
-            case 3:  // EXECUTE
-                return handle_execute(order_id, quantity);
-            default:
-                return false;
-        }
+        return false;
+    }
+
+    // Zero-copy accessors
+    inline ArrayBasedOrderBook<20>::Level get_best_bid() const {
+        if (book_.bids.count == 0) return {0.0, 0.0, 0};
+        return {book_.bids.prices[0], book_.bids.quantities[0], book_.bids.counts[0]};
     }
     
-    // Get top N levels for OFI calculation
-    inline void get_top_levels(size_t n, 
-                              std::vector<FastPriceLevel>& bids,
-                              std::vector<FastPriceLevel>& asks) const {
-        book_.get_top_bids(n, bids);
-        book_.get_top_asks(n, asks);
+    inline ArrayBasedOrderBook<20>::Level get_best_ask() const {
+        if (book_.asks.count == 0) return {0.0, 0.0, 0};
+        return {book_.asks.prices[0], book_.asks.quantities[0], book_.asks.counts[0]};
     }
-    
-    // Get best bid/ask
-    inline std::pair<const FastPriceLevel*, const FastPriceLevel*> get_bbo() const {
-        return {book_.get_best_bid(), book_.get_best_ask()};
-    }
-    
+
 private:
-    std::string symbol_;
-    ArrayBasedOrderBook<100> book_;
-    std::unordered_map<uint64_t, FastTrackedOrder> orders_;  // order_id -> order
-    uint64_t last_sequence_number_;
+    uint64_t last_seq_;
     
-    // Price level aggregation (sum quantities per price)
-    std::unordered_map<double, double> bid_level_quantities_;
-    std::unordered_map<double, uint32_t> bid_level_counts_;
-    std::unordered_map<double, double> ask_level_quantities_;
-    std::unordered_map<double, uint32_t> ask_level_counts_;
+    // Core Structures
+    ArrayBasedOrderBook<20> book_; // Track top 20 levels
     
-    inline bool handle_add(uint64_t order_id, double price, double quantity, bool is_bid) {
-        // Track order
-        FastTrackedOrder order;
-        order.order_id = order_id;
-        order.price = price;
-        order.quantity = quantity;
-        order.is_bid = is_bid;
-        orders_[order_id] = order;
-        
-        // Update price level aggregation
-        if (is_bid) {
-            bid_level_quantities_[price] += quantity;
-            bid_level_counts_[price]++;
-            book_.update_bid(price, bid_level_quantities_[price], bid_level_counts_[price]);
-        } else {
-            ask_level_quantities_[price] += quantity;
-            ask_level_counts_[price]++;
-            book_.update_ask(price, ask_level_quantities_[price], ask_level_counts_[price]);
-        }
-        
+    // Hash Maps (Flat, Open Addressing)
+    FlatMap<uint64_t, TrackedOrder, ORDER_MAP_CAPACITY> orders_;
+    
+    // Map Price -> {TotalQty, Count}
+    // We Map price (double) to a struct. To hash double, cast to int64.
+    // Or scale by 10000 and cast. Here we use raw bit_cast logic for speed?
+    // Using simple int64 cast of price*1e4 for key?
+    // Let's use internal LevelMaps
+    struct LevelState { double qty; uint32_t cnt; };
+    
+    // Note: Double as key is risky. In prod we use int64_t price_ticks.
+    // Here we cast double bits to uint64 for hashing.
+    struct PxHash {
+        static uint64_t k(double d) { uint64_t r; std::memcpy(&r, &d, 8); return r; }
+    };
+    
+    // We actually need a specialized map for double keys.
+    // For simplicity, let's assume we implement the helper logic inline or 
+    // use the FlatMap with uint64_t keys (bit cast).
+    // Let's stick to the logic:
+    
+    // Implementation of Add
+    bool on_add(uint64_t oid, double px, double qty, bool bid) {
+        TrackedOrder o = {oid, px, qty, bid};
+        orders_.insert_or_assign(oid, o);
+        update_level(px, qty, 1, bid);
         return true;
     }
     
-    inline bool handle_modify(uint64_t order_id, double new_price, double new_quantity, bool is_bid) {
-        auto it = orders_.find(order_id);
-        if (it == orders_.end()) {
-            return handle_add(order_id, new_price, new_quantity, is_bid);
-        }
-        
-        auto& order = it->second;
-        double old_price = order.price;
-        double old_quantity = order.quantity;
-        
-        // Remove old quantity from old price level
-        if (is_bid) {
-            bid_level_quantities_[old_price] -= old_quantity;
-            bid_level_counts_[old_price]--;
-            book_.update_bid(old_price, bid_level_quantities_[old_price], bid_level_counts_[old_price]);
-        } else {
-            ask_level_quantities_[old_price] -= old_quantity;
-            ask_level_counts_[old_price]--;
-            book_.update_ask(old_price, ask_level_quantities_[old_price], ask_level_counts_[old_price]);
-        }
-        
-        // Add new quantity at new price level
-        order.price = new_price;
-        order.quantity = new_quantity;
-        
-        if (is_bid) {
-            bid_level_quantities_[new_price] += new_quantity;
-            bid_level_counts_[new_price]++;
-            book_.update_bid(new_price, bid_level_quantities_[new_price], bid_level_counts_[new_price]);
-        } else {
-            ask_level_quantities_[new_price] += new_quantity;
-            ask_level_counts_[new_price]++;
-            book_.update_ask(new_price, ask_level_quantities_[new_price], ask_level_counts_[new_price]);
-        }
-        
+    bool on_del(uint64_t oid) {
+        auto* o = orders_.find(oid);
+        if(!o) return false;
+        update_level(o->px, -o->qty, -1, o->is_bid);
+        orders_.erase(oid);
         return true;
     }
     
-    inline bool handle_delete(uint64_t order_id) {
-        auto it = orders_.find(order_id);
-        if (it == orders_.end()) {
-            return false;
-        }
+    bool on_mod(uint64_t oid, double px, double qty, bool bid) {
+        auto* o = orders_.find(oid);
+        if(!o) return on_add(oid, px, qty, bid);
+
+        // Remove old impact
+        update_level(o->px, -o->qty, -1, o->is_bid);
         
-        auto& order = it->second;
+        // Update order
+        o->px = px;
+        o->qty = qty;
         
-        if (order.is_bid) {
-            bid_level_quantities_[order.price] -= order.quantity;
-            bid_level_counts_[order.price]--;
-            book_.update_bid(order.price, bid_level_quantities_[order.price], bid_level_counts_[order.price]);
-        } else {
-            ask_level_quantities_[order.price] -= order.quantity;
-            ask_level_counts_[order.price]--;
-            book_.update_ask(order.price, ask_level_quantities_[order.price], ask_level_counts_[order.price]);
-        }
-        
-        orders_.erase(it);
+        // Add new impact
+        update_level(px, qty, 1, bid);
         return true;
     }
-    
-    inline bool handle_execute(uint64_t order_id, double executed_quantity) {
-        auto it = orders_.find(order_id);
-        if (it == orders_.end()) {
-            return true;  // Aggressive trade, no tracked order
+
+    bool on_exec(uint64_t oid, double exec_qty) {
+        auto* o = orders_.find(oid);
+        if(!o) return false;
+        
+        update_level(o->px, -exec_qty, 0, o->is_bid); // Count doesn't change on partial fill?
+        // Actually usually execution reduces qty. If full exec, delete comes later or implied?
+        // ITCH spec: Exec message reduces qty. If falls to 0, explicit delete usually sent separately?
+        // Or implied? Let's assume explicit delete comes if filled.
+        // If system implies fill=delete w/o separate msg, we need logic.
+        // Assuming partial fill here:
+        o->qty -= exec_qty;
+        if(o->qty < 1e-9) {
+             update_level(o->px, 0, -1, o->is_bid); // removal of order count
+             orders_.erase(oid);
         }
+        return true;
+    }
+
+    void update_level(double px, double qty_delta, int32_t cnt_delta, bool bid) {
+        // We maintain the bookkeeping in a flat map too?
+        // Or just rely on the Book?
+        // Standard LOB: We MUST track total size at level to know when level vanishes.
+        // ArrayBasedOrderBook update needs absolute values.
+        // So we need a Price->State map.
         
-        auto& order = it->second;
+        uint64_t key; std::memcpy(&key, &px, 8);
         
-        if (order.is_bid) {
-            bid_level_quantities_[order.price] -= executed_quantity;
-            book_.update_bid(order.price, bid_level_quantities_[order.price], bid_level_counts_[order.price]);
-        } else {
-            ask_level_quantities_[order.price] -= executed_quantity;
-            book_.update_ask(order.price, ask_level_quantities_[order.price], ask_level_counts_[order.price]);
-        }
-        
-        order.quantity -= executed_quantity;
-        if (order.quantity <= 0.0) {
-            if (order.is_bid) {
-                bid_level_counts_[order.price]--;
+        if (bid) {
+            LevelState* s = bid_levels_.find(key);
+            if (!s) {
+                // New level
+                if (qty_delta > 0) {
+                    LevelState ns = {qty_delta, (uint32_t)cnt_delta};
+                    bid_levels_.insert_or_assign(key, ns);
+                    book_.update_bid(px, ns.qty, ns.cnt);
+                }
             } else {
-                ask_level_counts_[order.price]--;
+                s->qty += qty_delta;
+                s->cnt += cnt_delta; // wraps if negative? cast to signed to add then back?
+                // cnt_delta is int, s->cnt is uint.
+                
+                if (s->qty < 1e-9 || s->cnt == 0) {
+                    bid_levels_.erase(key);
+                    book_.update_bid(px, 0, 0);
+                } else {
+                    book_.update_bid(px, s->qty, s->cnt);
+                }
             }
-            orders_.erase(it);
+        } else {
+            // Same for ask
+           LevelState* s = ask_levels_.find(key);
+            if (!s) {
+                if (qty_delta > 0) {
+                    LevelState ns = {qty_delta, (uint32_t)cnt_delta};
+                    ask_levels_.insert_or_assign(key, ns);
+                    book_.update_ask(px, ns.qty, ns.cnt);
+                }
+            } else {
+                s->qty += qty_delta;
+                s->cnt += cnt_delta;
+                if (s->qty < 1e-9 || s->cnt == 0) {
+                    ask_levels_.erase(key);
+                    book_.update_ask(px, 0, 0);
+                } else {
+                    book_.update_ask(px, s->qty, s->cnt);
+                }
+            }
         }
-        
-        return true;
     }
+    
+    FlatMap<uint64_t, LevelState, PRICE_MAP_CAPACITY> bid_levels_;
+    FlatMap<uint64_t, LevelState, PRICE_MAP_CAPACITY> ask_levels_;
 };
 
-} // namespace fast_lob
 } // namespace hft

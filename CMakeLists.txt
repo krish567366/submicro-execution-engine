@@ -66,6 +66,12 @@ endif()
 # ====
 # Platform-specific optimizations
 # ====
+if(APPLE)
+    # Enable non-optimal build on Mac (ARM64) for development
+    add_compile_definitions(ALLOW_NON_OPTIMAL_BUILD)
+    message(WARNING "Building on macOS (Apple Silicon). Production optimizations disabled.")
+endif()
+
 if(UNIX AND NOT APPLE)
     # Linux-specific: prepare for kernel bypass and DPDK
     add_compile_definitions(
@@ -113,6 +119,7 @@ set(SOURCES
 # ====
 add_executable(hft_system ${SOURCES})
 add_executable(backtest_demo src/backtest_demo.cpp)
+add_executable(perf_benchmark src/perf_benchmark.cpp)
 
 # ====
 # Linking
@@ -120,6 +127,7 @@ add_executable(backtest_demo src/backtest_demo.cpp)
 if(UNIX)
     target_link_libraries(hft_system PRIVATE Threads::Threads OpenSSL::SSL OpenSSL::Crypto)
     target_link_libraries(backtest_demo PRIVATE Threads::Threads OpenSSL::SSL OpenSSL::Crypto)
+    target_link_libraries(perf_benchmark PRIVATE Threads::Threads OpenSSL::SSL OpenSSL::Crypto)
     
     if(Boost_FOUND)
         target_include_directories(hft_system PRIVATE ${Boost_INCLUDE_DIRS})

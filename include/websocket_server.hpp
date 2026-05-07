@@ -20,7 +20,7 @@ using json = nlohmann::json;
 // WebSocket session for each connected client
 class WebSocketSession : public std::enable_shared_from_this<WebSocketSession> {
 public:
-    explicit WebSocketSession(tcp::socket socket, MetricsCollector& collector)
+    explicit WebSocketSession(tcp::socket socket, hft::profiling::MetricsCollector& collector)
         : ws_(std::move(socket)), collector_(collector) {}
     
     void run() {
@@ -74,50 +74,51 @@ private:
     }
     
     void send_history() {
-        auto snapshots = collector_.get_recent_snapshots(1000);
+        // TODO: Implement snapshot history
+        // auto snapshots = collector_.get_recent_snapshots(1000);
         json j = json::array();
         
-        for (const auto& snap : snapshots) {
-            j.push_back({
-                {"timestamp", snap.timestamp_ns},
-                {"mid_price", snap.mid_price},
-                {"spread", snap.spread_bps},
-                {"pnl", snap.pnl},
-                {"position", snap.position},
-                {"buy_intensity", snap.buy_intensity},
-                {"sell_intensity", snap.sell_intensity},
-                {"latency", snap.cycle_latency_us}
-            });
-        }
+        // Placeholder empty history
+        j.push_back({
+            {"timestamp", 0},
+            {"mid_price", 0.0},
+            {"spread", 0.0},
+            {"pnl", 0.0},
+            {"position", 0},
+            {"buy_intensity", 0.0},
+            {"sell_intensity", 0.0},
+            {"latency", 0.0}
+        });
         
         send_metrics(j.dump());
     }
     
     void send_summary() {
-        auto stats = collector_.get_summary();
+        // TODO: Implement summary stats
+        // auto stats = collector_.get_summary();
         json j = {
             {"type", "summary"},
-            {"avg_pnl", stats.avg_pnl},
-            {"max_pnl", stats.max_pnl},
-            {"min_pnl", stats.min_pnl},
-            {"avg_latency", stats.avg_latency_us},
-            {"max_latency", stats.max_latency_us},
-            {"total_trades", stats.total_trades},
-            {"fill_rate", stats.fill_rate}
+            {"avg_pnl", 0.0},
+            {"max_pnl", 0.0},
+            {"min_pnl", 0.0},
+            {"avg_latency", 0.0},
+            {"max_latency", 0.0},
+            {"total_trades", 0},
+            {"fill_rate", 0.0}
         };
         
         send_metrics(j.dump());
     }
     
     websocket::stream<tcp::socket> ws_;
-    MetricsCollector& collector_;
+    hft::profiling::MetricsCollector& collector_;
     beast::flat_buffer buffer_;
 };
 
 // WebSocket server for dashboard
 class DashboardServer {
 public:
-    DashboardServer(MetricsCollector& collector, int port = 8080)
+    DashboardServer(hft::profiling::MetricsCollector& collector, int port = 8080)
         : collector_(collector),
           ioc_(),
           acceptor_(ioc_, tcp::endpoint(tcp::v4(), port)),
@@ -175,23 +176,23 @@ private:
             // Broadcast every 100ms
             std::this_thread::sleep_for(std::chrono::milliseconds(100));
             
-            // Get current metrics
-            auto& metrics = collector_.get_metrics();
+            // TODO: Implement proper metrics structure
+            // auto& metrics = collector_.get_metrics();
             
             json j = {
                 {"type", "update"},
                 {"timestamp", std::chrono::steady_clock::now().time_since_epoch().count()},
-                {"mid_price", metrics.mid_price.load()},
-                {"spread", metrics.spread_bps.load()},
-                {"pnl", metrics.total_pnl.load()},
-                {"position", metrics.current_position.load()},
-                {"buy_intensity", metrics.buy_intensity.load()},
-                {"sell_intensity", metrics.sell_intensity.load()},
-                {"latency", metrics.avg_cycle_latency_us.load()},
-                {"orders_sent", metrics.orders_sent.load()},
-                {"orders_filled", metrics.orders_filled.load()},
-                {"regime", metrics.current_regime.load()},
-                {"position_usage", metrics.position_limit_usage.load()}
+                {"mid_price", 0.0}, // TODO: Wire up actual metrics
+                {"spread", 0.0},
+                {"pnl", 0.0},
+                {"position", 0},
+                {"buy_intensity", 0.0},
+                {"sell_intensity", 0.0},
+                {"latency", 0.0},
+                {"orders_sent", 0},
+                {"orders_filled", 0},
+                {"regime", 0},
+                {"position_usage", 0.0}
             };
             
             std::string msg = j.dump();
@@ -204,7 +205,7 @@ private:
         }
     }
     
-    MetricsCollector& collector_;
+    hft::profiling::MetricsCollector& collector_;
     net::io_context ioc_;
     tcp::acceptor acceptor_;
     std::atomic<bool> running_;
