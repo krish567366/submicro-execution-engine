@@ -85,6 +85,8 @@ trading_demo
 backtest_demo
 csv_demo
 benchmark_suite
+hft_system
+perf_benchmark
 
 # CMake
 CMakeCache.txt
@@ -108,6 +110,7 @@ logs/backtest_replay.log
 logs/institutional_replay.log
 logs/*_production_*.log
 logs/*_live_*.log
+run_output.log
 
 # Real execution logs
 logs/real_fills_*.log
